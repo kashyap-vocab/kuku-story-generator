@@ -23,6 +23,7 @@ from .plan_store import (
     load_bible, load_cast, load_threads, new_plan_version, save_bible, seed_from_bible,
     thread_lifecycle, thread_status, upsert_character,
 )
+from .similarity import REPEAT, near_copies, overlap
 from .story import get_story
 from .tracing import log_step
 
@@ -232,8 +233,9 @@ class Planner:
         ctx = self._ctx("plan_beats", story_id, run_id)
         out = self.llm.structured(prompt, model, ctx, temperature=0.7, max_tokens=6000)
 
-        hard = self._beat_problems(out.beats, eps, state_before, must_close)
-        problems = hard + self._repeat_problems(story_id, earlier, out.beats, eps, run_id)
+        hard = self._beat_problems(out.beats, eps, state_before, must_close, earlier)
+        copied = {int(p.split()[1]) for p in hard if "nearly a copy" in p}
+        problems = hard + self._repeat_problems(story_id, earlier, out.beats, eps, run_id, skip=copied)
         if problems:
             log_step(self.conn, "plan_beats", "repair", run_id=run_id, story_id=story_id,
                      detail={"arc": arc["arc_no"], "problems": problems})
@@ -241,7 +243,7 @@ class Planner:
                 P.repair_messages(prompt, out.model_dump_json(), problems), model,
                 self._ctx("plan_beats_repair", story_id, run_id), temperature=0.5, max_tokens=6000,
             )
-            left = self._beat_problems(repaired.beats, eps, state_before, must_close)
+            left = self._beat_problems(repaired.beats, eps, state_before, must_close, earlier)
             # Keep the rewrite unless it made the code-checked problems worse.
             if len(left) <= len(hard):
                 out = repaired
@@ -290,11 +292,18 @@ class Planner:
 
     @staticmethod
     def _beat_problems(
-        beats: list[Any], eps: list[int], state_before: dict[str, str], must_close: list[dict[str, Any]]
+        beats: list[Any], eps: list[int], state_before: dict[str, str], must_close: list[dict[str, Any]],
+        earlier: list[dict[str, Any]],
     ) -> list[str]:
         """What code can tell for sure is wrong with an arc's plan lines."""
         closing = {t["key"] for t in must_close}
-        out = []
+        # Copies of earlier lines (the model sometimes copies the previous arc it was shown).
+        out = [
+            f"Ep {ep} is nearly a copy of ep {src} ({int(score * 100)}% the same words). Write a new event."
+            for ep, src, score in near_copies(
+                [(ep, b.beat) for ep, b in zip(eps, beats)], [(b["ep_no"], b["beat"]) for b in earlier]
+            )
+        ]
         for key, state in state_before.items():
             moves = [(ep, m.event) for ep, b in zip(eps, beats) for m in b.threads if m.key == key]
             found, final = thread_lifecycle(moves, state)
@@ -305,8 +314,11 @@ class Planner:
 
     def _repeat_problems(
         self, story_id: int, earlier: list[dict[str, Any]], beats: list[Any], eps: list[int], run_id: int | None,
+        skip: set[int] = frozenset(),
     ) -> list[str]:
-        """Ask the model, one row per new episode, whether it repeats anything before it."""
+        """Ask the model, one row per new episode, which earlier episode is most like it.
+        The model finds the pair; code decides if it's a repeat (the model's own yes/no
+        is unreliable: it has matched copies correctly and still said "not the same")."""
         new = [{"ep_no": ep, "beat": b.beat, "hook": b.hook} for ep, b in zip(eps, beats)]
         try:
             out = self.llm.structured(
@@ -317,12 +329,14 @@ class Planner:
             log_step(self.conn, "plan_repeat_check", "failed", run_id=run_id, story_id=story_id,
                      detail={"error": str(exc)})
             return []
-        known = {b["ep_no"] for b in earlier} | set(eps)
-        return [
-            f"Ep {r.ep_no} repeats ep {r.closest_ep} ({r.what_is_alike}). Give it a different event."
-            for r in out.rows
-            if r.same_event and r.closest_ep in known and r.closest_ep != r.ep_no
-        ]
+        text = {b["ep_no"]: b["beat"] for b in earlier} | {ep: b.beat for ep, b in zip(eps, beats)}
+        problems = []
+        for r in out.rows:
+            if r.ep_no in skip or r.closest_ep not in text or r.closest_ep == r.ep_no:
+                continue
+            if r.same_event or overlap(text[r.ep_no], text[r.closest_ep]) >= REPEAT:
+                problems.append(f"Ep {r.ep_no} repeats ep {r.closest_ep} ({r.what_is_alike}). Give it a different event.")
+        return problems
 
     # ------------------------------------------------------------ helpers
 

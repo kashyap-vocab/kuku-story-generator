@@ -257,3 +257,46 @@ def test_repeated_plan_lines_get_one_repair(make_engine):
     assert repairs[0]["messages"][2]["role"] == "assistant"
     logged = engine.conn.execute("SELECT COUNT(*) FROM steps WHERE node = 'plan_beats' AND decision = 'repair'").fetchone()[0]
     assert logged >= 4
+
+
+def test_similarity_scores():
+    from serial_writer.similarity import near_copies, overlap
+
+    a = "Elias and Miller enter the Hardware Core, a cooling chamber that smells of burnt hair."
+    reworded = "Miller and Elias walk into the cooling chamber of the Hardware Core; it smells like burnt hair."
+    different = "Sarah finds her mother's diary in the flooded basement and reads the last page."
+    assert overlap(a, a) == 1.0
+    assert overlap(a, reworded) >= 0.5
+    assert overlap(a, different) < 0.1
+    assert near_copies([(12, reworded), (13, different)], [(4, a)]) == [(12, 4, round(overlap(reworded, a), 2))]
+
+
+def test_copied_arc_is_caught_even_when_the_model_says_its_fine(make_engine):
+    first_arc: list[dict] = []
+
+    def copy_first_arc(value, kwargs):
+        # The model copies arc 1's lines into every later arc.
+        if not first_arc:
+            first_arc.extend(value["beats"])
+        else:
+            value["beats"] = [dict(b) for b in first_arc]
+        return value
+
+    def says_all_different(value, kwargs):
+        for r in value["rows"]:
+            r["same_event"] = False
+        return value
+
+    fake = SchemaFake(hooks={"BeatsOut": copy_first_arc, "RepeatCheckOut": says_all_different})
+    engine = make_engine(fake)
+    _, status = _start(engine)
+
+    repairs = [r for r in fake.requests if r["response_format"]["json_schema"]["name"] == "BeatsOut"
+               and len(r["messages"]) == 4]
+    # Arc 2 (eps 5-8) copies arc 1 (eps 1-4).
+    assert any("Ep 5 is nearly a copy of ep 1" in r["messages"][-1]["content"] for r in repairs)
+    # The fake keeps copying even after repair, so the plan check must still flag it for the human.
+    report = engine.conn.execute(
+        "SELECT check_report FROM plan_versions WHERE id = ?", (status["waiting_for"]["plan_version_id"],)
+    ).fetchone()[0]
+    assert "nearly a copy" in report

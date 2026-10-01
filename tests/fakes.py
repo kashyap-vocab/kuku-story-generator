@@ -11,10 +11,14 @@ from typing import Any, Callable
 from .conftest import make_response
 
 
+# Shared across calls, so no two fake answers ever contain the same string.
+_COUNTER = itertools.count(1)
+
+
 def instance(schema: dict[str, Any], defs: dict[str, Any] | None = None, counter=None) -> Any:
     """Smallest valid value for a JSON schema. Strings are numbered so names and keys stay unique."""
     defs = schema.get("$defs", {}) if defs is None else defs
-    counter = counter or itertools.count(1)
+    counter = counter or _COUNTER
     if "$ref" in schema:
         return instance(defs[schema["$ref"].split("/")[-1]], defs, counter)
     if "anyOf" in schema:
@@ -37,7 +41,8 @@ def instance(schema: dict[str, Any], defs: dict[str, Any] | None = None, counter
         return schema.get("minimum", 1.0)
     if kind == "boolean":
         return False
-    return f"text {next(counter)}"
+    n = next(counter)
+    return f"text{n} note{n} line{n}"  # unique words, so fake lines never look like copies
 
 
 class SchemaFake:

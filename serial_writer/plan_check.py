@@ -20,6 +20,7 @@ from .plan_models import act_review_model, rules_review_model
 from .plan_store import (
     load_acts, load_arcs, load_beats, load_bible, load_cast, load_threads, thread_lifecycle,
 )
+from .similarity import near_copies
 from .tracing import log_step
 
 # A thread or main character quiet for longer than this gets flagged.
@@ -57,6 +58,11 @@ def code_checks(conn: sqlite3.Connection, pv: int, total: int) -> list[dict[str,
         for m in b["threads"]:
             if m["key"] not in keys:
                 out.append(problem("thread", [b["ep_no"]], f"Thread [{m['key']}] does not exist", "must_fix", key=m["key"]))
+
+    # Copied plan lines.
+    for ep, src, score in near_copies([(b["ep_no"], b["beat"]) for b in beats], []):
+        out.append(problem("repetition", [src, ep], f"Ep {ep} is nearly a copy of ep {src} "
+                           f"({int(score * 100)}% the same words)", "must_fix"))
 
     # Threads: opened before they move, nothing after resolving, not left quiet too long.
     for t in load_threads(conn, pv):

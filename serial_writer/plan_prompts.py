@@ -198,7 +198,8 @@ def beats_prompt(
     note: str | None,
 ) -> list[dict[str, str]]:
     prev = (
-        f"PREVIOUS ARC {prev_arc['arc_no']}: {prev_arc['title']}: {prev_arc['goal']}\n{render_beats(prev_beats)}"
+        f"PREVIOUS ARC {prev_arc['arc_no']} (shown only so you continue from where it ends; NEVER copy or reuse its lines): "
+        f"{prev_arc['title']}: {prev_arc['goal']}\n{render_beats(prev_beats)}"
         if prev_arc else "(this is the first arc)"
     )
     nxt = f"NEXT ARC (lead into it): {next_arc['title']}: {next_arc['goal']}" if next_arc else "(this is the last arc of the story)"
