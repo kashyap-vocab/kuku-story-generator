@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from serial_writer.engine import Engine
+from serial_writer.llm import LLMError
+from serial_writer.plan_shape import act_spans, all_arc_spans, split
+from serial_writer.plan_store import load_acts, load_arcs, load_beats
+
+from .fakes import SchemaFake
+
+TOTAL = 20  # 5 acts of 4 episodes, one arc each
+
+
+@pytest.fixture
+def make_engine(settings):
+    engines = []
+
+    def make(client):
+        e = Engine(replace(settings, episode_token_budget=10**9), client=client)
+        engines.append(e)
+        return e
+
+    yield make
+    for e in engines:
+        e.close()
+
+
+def _start(engine) -> tuple[int, dict]:
+    sid = engine.create_story("A rider delivers to the dead.", total_episodes=TOTAL)
+    return sid, engine.advance(sid)
+
+
+def _plans(engine, sid):
+    return engine.conn.execute(
+        "SELECT id, version, status, created_by, parent_id FROM plan_versions WHERE story_id = ? ORDER BY version",
+        (sid,),
+    ).fetchall()
+
+
+# ---------------------------------------------------------------- shape
+
+
+def test_split_covers_every_episode_once():
+    acts = act_spans(200)
+    assert [(a.start, a.end) for a in acts] == [(1, 40), (41, 80), (81, 120), (121, 160), (161, 200)]
+    arcs = [s for spans in all_arc_spans(acts).values() for s in spans]
+    assert len(arcs) == 20 and [s.no for s in arcs] == list(range(1, 21))
+    assert [e for s in arcs for e in range(s.start, s.end + 1)] == list(range(1, 201))
+    assert split(1, 7, 3) == [(1, 3), (4, 5), (6, 7)]
+
+
+# ---------------------------------------------------------------- flow
+
+
+def test_planning_stops_for_human_review(make_engine):
+    engine = make_engine(SchemaFake())
+    sid, status = _start(engine)
+
+    assert status["state"] == "waiting"
+    assert status["waiting_for"]["kind"] == "plan_review"
+    pv = status["waiting_for"]["plan_version_id"]
+    assert len(load_acts(engine.conn, pv)) == 5
+    assert len(load_arcs(engine.conn, pv)) == 5
+    assert [b["ep_no"] for b in load_beats(engine.conn, pv)] == list(range(1, TOTAL + 1))
+    report = engine.conn.execute("SELECT check_report FROM plan_versions WHERE id = ?", (pv,)).fetchone()[0]
+    assert report is not None
+    assert engine.conn.execute("SELECT status FROM stories WHERE id = ?", (sid,)).fetchone()[0] == "plan_review"
+
+
+def test_approve_locks_plan_and_records_feedback(make_engine):
+    engine = make_engine(SchemaFake())
+    sid, status = _start(engine)
+    pv = status["waiting_for"]["plan_version_id"]
+
+    assert engine.advance(sid, {"action": "approve", "note": "looks good"})["state"] == "done"
+    assert engine.conn.execute("SELECT status FROM plan_versions WHERE id = ?", (pv,)).fetchone()[0] == "approved"
+    assert engine.conn.execute("SELECT status FROM bible_versions WHERE story_id = ?", (sid,)).fetchone()[0] == "approved"
+    assert engine.conn.execute("SELECT status FROM stories WHERE id = ?", (sid,)).fetchone()[0] == "writing"
+    fb = engine.conn.execute("SELECT action, text FROM feedback WHERE story_id = ?", (sid,)).fetchall()
+    assert [tuple(r) for r in fb] == [("plan_approve", "looks good")]
+
+
+def test_edit_makes_new_version_and_asks_again(make_engine):
+    fake = SchemaFake()
+    engine = make_engine(fake)
+    sid, status = _start(engine)
+    pv = status["waiting_for"]["plan_version_id"]
+    calls_before = len(fake.calls)
+
+    status = engine.advance(sid, {
+        "action": "edit", "note": "sharper start",
+        "changes": {"acts": {"1": {"title": "The Wrong Route"}}, "beats": {"3": {"hook": "The door is already open."}}},
+    })
+
+    assert status["state"] == "waiting"
+    new_pv = status["waiting_for"]["plan_version_id"]
+    assert new_pv != pv
+    plans = _plans(engine, sid)
+    assert [(p["status"], p["created_by"]) for p in plans] == [("superseded", "model"), ("draft", "human")]
+    assert plans[1]["parent_id"] == pv
+    assert load_acts(engine.conn, new_pv)[0]["title"] == "The Wrong Route"
+    assert load_beats(engine.conn, new_pv, 3, 3)[0]["hook"] == "The door is already open."
+    # The old version is untouched.
+    assert load_acts(engine.conn, pv)[0]["title"] != "The Wrong Route"
+    # A human edit is re-checked, not re-planned: only the plan-check calls run again.
+    assert set(fake.calls[calls_before:]) == {"ActReviewOut", "RulesCheckOut"}
+
+
+def test_bad_edit_is_rejected_and_review_asked_again(make_engine):
+    engine = make_engine(SchemaFake())
+    sid, status = _start(engine)
+    pv = status["waiting_for"]["plan_version_id"]
+
+    status = engine.advance(sid, {"action": "edit", "changes": {"beats": {"2": {"characters": ["Nobody"]}}}})
+
+    assert status["state"] == "waiting"
+    assert "Nobody" in status["waiting_for"]["error"]
+    assert status["waiting_for"]["plan_version_id"] == pv
+    assert len(_plans(engine, sid)) == 1
+
+
+def test_redo_arc_rebuilds_only_that_arc(make_engine):
+    fake = SchemaFake()
+    engine = make_engine(fake)
+    sid, status = _start(engine)
+    pv = status["waiting_for"]["plan_version_id"]
+    old = {b["ep_no"]: b["beat"] for b in load_beats(engine.conn, pv)}
+    calls_before = len(fake.calls)
+
+    status = engine.advance(sid, {"action": "redo", "target": "arc", "no": 2, "note": "make it scarier"})
+
+    new_pv = status["waiting_for"]["plan_version_id"]
+    new = {b["ep_no"]: b["beat"] for b in load_beats(engine.conn, new_pv)}
+    assert sorted(new) == list(range(1, TOTAL + 1))
+    arc2 = range(5, 9)
+    assert all(new[e] == old[e] for e in new if e not in arc2)
+    # Only arc 2 is re-planned (plus its repeat check and maybe one repair), then the plan check.
+    assert {c for c in fake.calls[calls_before:] if c not in ("ActReviewOut", "RulesCheckOut")} == {"BeatsOut", "RepeatCheckOut"}
+    assert fake.calls[calls_before:].count("BeatsOut") <= 2
+    # The reviewer's note reached the model.
+    beats_req = [r for r in fake.requests[calls_before:] if r["response_format"]["json_schema"]["name"] == "BeatsOut"][0]
+    assert "make it scarier" in beats_req["messages"][-1]["content"]
+
+
+def test_resume_after_crash_does_not_redo_finished_work(make_engine, settings):
+    fail = {"on": True}
+
+    def crash_on_beats(value, kwargs):
+        if fail["on"]:
+            raise RuntimeError("server died")
+        return value
+
+    fake = SchemaFake(hooks={"BeatsOut": crash_on_beats})
+    engine = make_engine(fake)
+    sid = engine.create_story("A rider delivers to the dead.", total_episodes=TOTAL)
+    with pytest.raises(RuntimeError, match="server died"):
+        engine.advance(sid)
+    assert engine.status(sid)["state"] == "paused"
+
+    # Come back later with a fresh engine (as after a restart).
+    fail["on"] = False
+    engine2 = make_engine(fake)
+    calls_before = len(fake.calls)
+    status = engine2.advance(sid)
+
+    assert status["state"] == "waiting"
+    assert "Bible" not in fake.calls[calls_before:] and "ActsOut" not in fake.calls[calls_before:]
+    assert engine2.conn.execute("SELECT COUNT(*) FROM bible_versions").fetchone()[0] == 1
+    assert engine2.conn.execute("SELECT COUNT(*) FROM plan_acts").fetchone()[0] == 5
+
+
+def test_llm_errors_are_logged_and_story_can_continue(make_engine):
+    attempts = {"n": 0}
+
+    def flaky_acts(value, kwargs):
+        attempts["n"] += 1
+        if attempts["n"] <= 3:
+            value["acts"] = value["acts"][:1]  # wrong number of acts -> fails validation
+        return value
+
+    engine = make_engine(SchemaFake(hooks={"ActsOut": flaky_acts}))
+    sid = engine.create_story("A rider delivers to the dead.", total_episodes=TOTAL)
+    with pytest.raises(LLMError):
+        engine.advance(sid)
+    bad = engine.conn.execute(
+        "SELECT COUNT(*) FROM llm_calls WHERE node = 'plan_acts' AND status = 'invalid_output'"
+    ).fetchone()[0]
+    assert bad == 3
+    assert engine.advance(sid)["state"] == "waiting"
+
+
+def test_arcs_cannot_duplicate_threads_or_people(make_engine):
+    def bible(value, kwargs):
+        value["cast"][0]["name"] = "Sarah Vance"
+        value["threads"][0].update(key="missing_ledger", title="The Missing Ledger")
+        return value
+
+    def arcs(value, kwargs):
+        for arc in value["arcs"]:
+            arc["new_threads"] = [
+                # Same title under a new key, and a brand-new subplot.
+                {"key": "missing_ledger_2", "title": "The missing ledger!", "question": "again?"},
+                {"key": "night_shift", "title": "Night Shift", "question": "Who works nights?"},
+            ]
+            arc["new_characters"] = [
+                {**arc["new_characters"][0], "name": "Sarah Vance (Voice Only)"},
+                {**arc["new_characters"][0], "name": "Officer Chen"},
+            ]
+        return value
+
+    engine = make_engine(SchemaFake(hooks={"Bible": bible, "ArcsOut": arcs}))
+    _, status = _start(engine)
+    pv = status["waiting_for"]["plan_version_id"]
+
+    keys = [r[0] for r in engine.conn.execute("SELECT key FROM plan_threads WHERE plan_version_id = ?", (pv,))]
+    assert keys.count("missing_ledger") == 1 and "missing_ledger_2" not in keys
+    assert keys.count("night_shift") == 1  # genuinely new, added once by the first arc only
+    names = [r[0] for r in engine.conn.execute("SELECT name FROM characters")]
+    assert "Sarah Vance (Voice Only)" not in names and names.count("Officer Chen") == 1
+    skipped = engine.conn.execute(
+        "SELECT COUNT(*) FROM steps WHERE decision IN ('skipped_new_thread', 'skipped_new_character')"
+    ).fetchone()[0]
+    assert skipped > 0
+
+
+def test_thread_lifecycle_rules():
+    from serial_writer.plan_store import thread_lifecycle
+
+    problems, state = thread_lifecycle([(1, "open"), (3, "advance"), (5, "resolve")])
+    assert problems == [] and state == "resolved"
+    problems, state = thread_lifecycle([(2, "advance"), (4, "resolve"), (6, "advance"), (8, "resolve")])
+    assert [(ep, sev) for ep, sev, _ in problems] == [(2, "must_fix"), (6, "must_fix"), (8, "must_fix")]
+    # Starting from the state before an arc: a resolved thread can't be touched again.
+    problems, _ = thread_lifecycle([(11, "advance")], state="resolved")
+    assert problems and "after it was resolved" in problems[0][2]
+
+
+def test_repeated_plan_lines_get_one_repair(make_engine):
+    def flag_first_as_repeat(value, kwargs):
+        rows = value["rows"]
+        first = rows[0]["ep_no"]
+        if first > 1:  # arcs after the first: say their first episode repeats episode 1
+            rows[0].update(same_event=True, closest_ep=1, what_is_alike="package vanishes again")
+        return value
+
+    fake = SchemaFake(hooks={"RepeatCheckOut": flag_first_as_repeat})
+    engine = make_engine(fake)
+    _start(engine)
+
+    repairs = [r for r in fake.requests if r["response_format"]["json_schema"]["name"] == "BeatsOut"
+               and len(r["messages"]) == 4 and "repeats ep" in r["messages"][-1]["content"]]
+    assert len(repairs) == 4  # arcs 2-5, one repair each, never more than one per arc
+    assert "repeats ep 1 (package vanishes again)" in repairs[0]["messages"][-1]["content"]
+    assert repairs[0]["messages"][2]["role"] == "assistant"
+    logged = engine.conn.execute("SELECT COUNT(*) FROM steps WHERE node = 'plan_beats' AND decision = 'repair'").fetchone()[0]
+    assert logged >= 4

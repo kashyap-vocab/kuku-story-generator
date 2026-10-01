@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Assignment brief: contains reviewer-only notes, keep it out of the repo
+*.docx
