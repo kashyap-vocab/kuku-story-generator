@@ -80,6 +80,8 @@ def create_app(engine: Engine) -> FastAPI:
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.filters["plain_title"] = plain_title
+    # Changes whenever the stylesheet does, so browsers never show an old copy.
+    templates.env.globals["css_v"] = int((HERE / "static" / "style.css").stat().st_mtime)
     pending = PendingEdits()
 
     def db() -> Iterator[sqlite3.Connection]:
@@ -159,6 +161,12 @@ def create_app(engine: Engine) -> FastAPI:
             else:
                 resp.headers["HX-Refresh"] = "true"
         return resp
+
+    @app.get("/stories/{sid}/dashboard", response_class=HTMLResponse)
+    def dashboard(request: Request, sid: int, conn: sqlite3.Connection = Depends(db)):
+        story_or_404(conn, sid)
+        return page(request, "_dashboard.html", story_id=sid, budget=engine.settings.episode_token_budget,
+                    **_dashboard(conn, sid))
 
     @app.post("/stories/{sid}/continue")
     def continue_story(sid: int):
@@ -472,6 +480,45 @@ def _progress(conn: sqlite3.Connection, sid: int) -> dict[str, Any]:
         (sid,),
     ).fetchall()
     return {"steps": steps, "usage": usage, "episodes": episodes, "active": directives(conn, sid)}
+
+
+def _percentile(values: list[int], pct: float) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * pct))]
+
+
+def _dashboard(conn: sqlite3.Connection, sid: int) -> dict[str, Any]:
+    """Tokens and latency for the side panel: totals, per step, and per recent episode."""
+    total = conn.execute(
+        """SELECT COUNT(*) AS calls, COALESCE(SUM(status <> 'ok'), 0) AS failed,
+                  COALESCE(SUM(prompt_tokens), 0) AS tokens_in, COALESCE(SUM(completion_tokens), 0) AS tokens_out,
+                  COALESCE(SUM(latency_ms), 0) AS ms
+           FROM llm_calls WHERE story_id = ?""", (sid,)).fetchone()
+    latencies = [r[0] for r in conn.execute(
+        "SELECT latency_ms FROM llm_calls WHERE story_id = ? AND status = 'ok'", (sid,))]
+    by_step = conn.execute(
+        """SELECT node, COUNT(*) AS calls, SUM(prompt_tokens + completion_tokens) AS tokens,
+                  CAST(AVG(latency_ms) AS INTEGER) AS avg_ms
+           FROM llm_calls WHERE story_id = ? GROUP BY node ORDER BY tokens DESC""", (sid,)).fetchall()
+    episodes = conn.execute(
+        """SELECT ep_no, COUNT(*) AS calls, SUM(prompt_tokens + completion_tokens) AS tokens,
+                  SUM(latency_ms) AS ms, SUM(status <> 'ok') AS failed
+           FROM llm_calls WHERE story_id = ? AND ep_no IS NOT NULL
+           GROUP BY ep_no ORDER BY ep_no DESC LIMIT 8""", (sid,)).fetchall()
+    written = conn.execute(
+        "SELECT COUNT(DISTINCT ep_no) FROM episode_versions WHERE story_id = ? AND status = 'approved'", (sid,)
+    ).fetchone()[0]
+    all_eps = conn.execute(
+        "SELECT SUM(prompt_tokens + completion_tokens), SUM(latency_ms) FROM llm_calls "
+        "WHERE story_id = ? AND ep_no IS NOT NULL", (sid,)).fetchone()
+    return {
+        "total": total, "by_step": by_step, "episodes": episodes, "written": written,
+        "p50": _percentile(latencies, 0.5), "p95": _percentile(latencies, 0.95),
+        "avg_ep_tokens": int((all_eps[0] or 0) / written) if written else 0,
+        "avg_ep_seconds": int((all_eps[1] or 0) / 1000 / written) if written else 0,
+    }
 
 
 def _lines(text: str) -> list[str]:

@@ -1,0 +1,27 @@
+{% macro secs(ms) %}{{ '%.1f' | format((ms or 0) / 1000) }}s{% endmacro %}
+{% macro k(n) %}{{ '{:,}'.format(n or 0) }}{% endmacro %}
+<div class="stat">
+  <span class="l">Tokens used</span>
+  <span class="v">{{ k(total.tokens_in + total.tokens_out) }}</span>
+  <span class="s">{{ k(total.tokens_in) }} in · {{ k(total.tokens_out) }} out</span>
+</div>
+<div class="stat">
+  <span class="l">Latency per call</span>
+  <span class="v">{{ secs(p50) }}</span>
+  <span class="s">median · slowest 5% over {{ secs(p95) }}</span>
+</div>
+{% if written %}
+<div class="stat">
+  <span class="l">Per episode</span>
+  <span class="v">{{ k(avg_ep_tokens) }}</span>
+  <span class="s">tokens · {{ avg_ep_seconds }}s · limit {{ k(budget) }}</span>
+  {% if episodes %}<div class="recent">
+    {% for e in episodes[:5] %}<div><span>Episode {{ e.ep_no }}</span><b>{{ k(e.tokens) }} · {{ secs(e.ms) }}</b></div>{% endfor %}
+  </div>{% endif %}
+</div>
+{% endif %}
+{% if total.failed %}
+<div class="stat warn"><span class="l">Retried calls</span><span class="v">{{ total.failed }}</span>
+  <span class="s">of {{ total.calls }} calls</span></div>
+{% endif %}
+{% if not total.calls %}<div class="stat"><span class="s">Numbers appear once the model is called.</span></div>{% endif %}

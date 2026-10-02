@@ -6,8 +6,22 @@ SQLite, and any OpenAI-compatible model server (we use Gemma 4 12B on vLLM).
 
 How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-**Status:** planning, episode writing, review and feedback all work in the web app.
-Still to come: DECISIONS.md, the cost estimate, and a hosted demo.
+**Status:** planning, episode writing, review, feedback, resume and a live usage
+panel all work in the web app. Demo output goes in `demo/`; DECISIONS.md and the
+cost estimate are written once the demo run has real numbers.
+
+## What it does
+
+| Requirement | Where |
+|---|---|
+| Plan all 200 episodes (acts, arcs, one line per episode, threads, character arcs) | Planner, then a plan check (code + model) |
+| Hold up at episode 150 | Memory pack of fixed size from tables, summaries and lookups, not the whole story |
+| Catch contradictions and repeats | Continuity, plan and repetition checks; every problem must quote the text |
+| Approve or edit the plan | Plan page: edit any line, redo an act or arc with a note, approve |
+| Review, edit or reject an episode | Episode page: approve, edit the text, or request changes |
+| Feedback carries forward | Lasting instructions go into every later episode; story changes re-plan the arc |
+| Stop and resume | Pause, continue later, or continue after a crash |
+| Traceable and bounded | Every model call logged; revision, retry and token limits per episode |
 
 ## Setup (about 5 minutes)
 
@@ -33,6 +47,15 @@ LLM_MODEL=surya2
 
 ```bash
 python -m serial_writer.web --host 0.0.0.0 --port 8000
+```
+
+Or from the command line (same engine, same database):
+
+```bash
+python -m serial_writer.cli new "your premise" --episodes 200
+python -m serial_writer.cli plan 1 --eps 1-20     # read the plan
+python -m serial_writer.cli approve 1
+python -m serial_writer.cli status 1              # also: continue, redo, usage
 ```
 
 Open http://localhost:8000, enter a premise, the number of episodes, and how often
@@ -65,8 +88,33 @@ current one if you press **Pause**. **Continue writing** picks up from there. If
 server stops mid-episode, the story page shows **Continue**, which resumes from the
 last finished step. The review setting can be changed any time.
 
+**Usage panel.** Every story page has a panel on the right: tokens used, median
+latency per call, tokens and time per episode against the limit, and retried
+calls. The numbers come from the call log, so they are exact.
+
 Run it in `tmux` or with `nohup ... &` so it keeps going after you disconnect.
 One process only: stories run in background threads inside it.
+
+## Settings
+
+All in `.env` (see `.env.example`): `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`,
+`DB_PATH`, `EPISODE_TOKEN_BUDGET` (default 150000 per episode), `MAX_REVISIONS`
+(default 2), `LLM_MAX_RETRIES`. Any OpenAI-compatible server works.
+
+## Layout
+
+```
+serial_writer/
+  planner.py, plan_*.py     planning, plan check, plan edits
+  writer.py, episode_*.py   outline, draft, checks, revise, memory updates
+  memory.py                 memory pack, memory updates, summaries
+  graph.py, engine.py       LangGraph flow, human stops, background runs
+  llm.py, tracing.py        model client, call/step logging
+  schema.sql                the story's database
+  web/                      FastAPI + HTMX pages
+docs/ARCHITECTURE.md        design and reasoning
+tests/                      fake-model tests, no server needed
+```
 
 ## Tests
 

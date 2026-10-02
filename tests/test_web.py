@@ -222,3 +222,15 @@ def test_status_poll_takes_the_reviewer_to_what_needs_them(web_writing):
     _wait(engine, sid)
     r = client.get(f"/stories/{sid}/status?was=running")
     assert r.headers.get("HX-Redirect") == f"/stories/{sid}/episodes/1"
+
+
+def test_usage_dashboard_shows_tokens_and_latency(web):
+    engine, client = web
+    sid, _ = _new_story(engine, client)
+
+    # Every story page carries the side panel, which loads the numbers itself.
+    assert f'hx-get="/stories/{sid}/dashboard"' in client.get(f"/stories/{sid}").text
+    panel = client.get(f"/stories/{sid}/dashboard")
+    assert panel.status_code == 200
+    assert "Tokens used" in panel.text and "Latency per call" in panel.text
+    assert client.get("/stories/99/dashboard").status_code == 404

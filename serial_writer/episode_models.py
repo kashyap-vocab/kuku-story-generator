@@ -24,7 +24,7 @@ def outline_model(names: list[str]) -> type[BaseModel]:
     )
     return create_model(
         "Outline",
-        title=(str, Field(description="Episode title, a few words")),
+        title=(str, Field(description="A title for this episode alone, 2-5 words, about what happens in it. Never the story's own title")),
         scenes=(list[Scene], Field(min_length=3, max_length=5)),
         closing_hook=(str, Field(description="The exact situation the episode stops on")),
     )
