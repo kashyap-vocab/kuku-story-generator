@@ -7,8 +7,9 @@ SQLite, and any OpenAI-compatible model server (we use Gemma 4 12B on vLLM).
 How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Status:** planning, episode writing, review, feedback, resume and a live usage
-panel all work in the web app. Demo output goes in `demo/`; DECISIONS.md and the
-cost estimate are written once the demo run has real numbers.
+panel all work in the web app. The demo output is in [demo/](demo/): the full
+200-episode plan, 20 written episodes, and the human interventions with their effects.
+Design reasoning and measured cost are in [DECISIONS.md](DECISIONS.md).
 
 ## What it does
 
