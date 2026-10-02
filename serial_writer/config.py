@@ -17,20 +17,15 @@ def _bool(value: str) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    # vLLM serves an OpenAI-compatible API, so the standard client works against it.
     llm_base_url: str
     llm_api_key: str
     llm_model: str
     llm_timeout_s: float
-    # Retries per call, on top of the first attempt.
     llm_max_retries: int
-    # Some Gemma chat templates reject a "system" message. When on, the system
-    # text is folded into the first user message instead.
     llm_merge_system_prompt: bool
 
     db_path: Path
 
-    # Hard limits that keep each episode bounded.
     episode_token_budget: int
     max_revisions: int
 

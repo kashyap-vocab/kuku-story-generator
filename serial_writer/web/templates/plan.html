@@ -43,14 +43,12 @@
   <a href="?tab=history" class="{{ 'on' if tab == 'history' }}">History</a>
 </nav>
 
-{# ------------------------------------------------------------------ episodes #}
 {% if tab == 'episodes' %}
 {% if reviewing %}<p class="muted small">Click <strong>✎ Edit</strong> on any act, arc or episode to change it, or <strong>↻ Redo</strong> to have the model rebuild it with your note.</p>{% endif %}
 
 {% for act in acts %}
 {% set pa = pending.acts.get(act.act_no | string) %}{% set va = pa or act %}
 {% set act_arcs = arcs_by_act[act.act_no] %}
-{# A short act has one arc that is the act itself: don't show it twice. #}
 {% set single = act_arcs | length == 1 and act_arcs[0].start_ep == act.start_ep and act_arcs[0].end_ep == act.end_ep %}
 <section class="card" id="act-{{ act.act_no }}">
   <div class="act-head">
@@ -141,7 +139,6 @@
 </section>
 {% endfor %}
 
-{# ------------------------------------------------------------------ story & characters #}
 {% elif tab == 'story' %}
 {% set pbib = pending.bible %}
 <section class="card" id="rules">
@@ -231,7 +228,6 @@
 </section>
 {% endif %}
 
-{# ------------------------------------------------------------------ problems #}
 {% elif tab == 'problems' %}
 <section class="card">
   <h2>What the checks found</h2>
@@ -251,7 +247,6 @@
   </ul>
 </section>
 
-{# ------------------------------------------------------------------ history #}
 {% else %}
 <section class="card">
   <h2>Plan versions</h2>

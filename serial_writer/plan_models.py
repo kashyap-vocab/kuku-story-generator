@@ -12,8 +12,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, create_model
 
-# ---------------------------------------------------------------- helpers
-
 
 def one_of(values: list[str]) -> Any:
     """A type that only accepts one of `values`."""
@@ -25,9 +23,6 @@ def one_of(values: list[str]) -> Any:
 def thread_key(text: str) -> str:
     """'The Missing Ledger' -> 'the_missing_ledger'."""
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "thread"
-
-
-# ---------------------------------------------------------------- story rules
 
 
 class CastMember(BaseModel):
@@ -59,9 +54,6 @@ class Bible(BaseModel):
     )
     cast: list[CastMember] = Field(min_length=6, max_length=12)
     threads: list[StoryThread] = Field(min_length=4, max_length=10)
-
-
-# ---------------------------------------------------------------- plan levels
 
 
 def bible_model(size: Any) -> type[BaseModel]:
@@ -120,22 +112,17 @@ def arcs_model(n_arcs: int, names: list[str], max_new: int = 2) -> type[BaseMode
 
 def beats_model(n_beats: int, names: list[str], keys: list[str]) -> type[BaseModel]:
     Name = one_of(names)
-    # With every thread resolved there is nothing left to pick.
     Key = one_of(keys) if keys else str
     max_moves = 4 if keys else 0
     Move = create_model("ThreadMove", key=(Key, ...), event=(Literal["open", "advance", "resolve"], ...))
     Beat = create_model(
         "Beat",
-        # Lengths stop a lazy answer ("Ep 12") from passing as a plan line.
         beat=(str, Field(min_length=40, description="What must happen in this episode, 2-3 plain sentences")),
         hook=(str, Field(min_length=15, description="The cliffhanger the episode ends on")),
         characters=(list[Name], Field(min_length=1, max_length=6)),
         threads=(list[Move], Field(default_factory=list, max_length=max_moves)),
     )
     return create_model("BeatsOut", beats=(list[Beat], Field(min_length=n_beats, max_length=n_beats)))
-
-
-# ---------------------------------------------------------------- human decisions
 
 
 class CastEdit(BaseModel):
@@ -202,12 +189,6 @@ class PlanDecision(BaseModel):
     changes: PlanChanges | None = None
     target: Literal["bible", "all", "act", "arc"] | None = None
     no: int | None = None
-
-
-# ---------------------------------------------------------------- reviews
-#
-# A small model asked "list any problems" tends to answer "none". These shapes
-# make it give one answer per item instead, so it has to look at each one.
 
 
 def repetition_model(new_eps: list[int], last_ep: int) -> type[BaseModel]:

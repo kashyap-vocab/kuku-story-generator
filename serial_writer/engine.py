@@ -26,7 +26,6 @@ class Engine:
         self.settings = settings
         self.conn = connect(settings.db_path)
         init_db(self.conn)
-        # Graph checkpoints live in their own file, so they never contend with story reads.
         ckpt_path = settings.db_path.with_name("checkpoints.db")
         self._ckpt_conn = sqlite3.connect(str(ckpt_path), check_same_thread=False)
         self.llm = LLMClient(settings, self.conn, client=client)
@@ -35,7 +34,6 @@ class Engine:
                                  max_revisions=settings.max_revisions, stop_requested=lambda sid: sid in self._stop)
         self._running: set[int] = set()
         self._guard = threading.Lock()
-        # Last error from a background run, per story, until the next run starts.
         self.errors: dict[int, str] = {}
 
     def close(self) -> None:
@@ -85,7 +83,7 @@ class Engine:
         def work() -> None:
             try:
                 self._run(story_id, payload)
-            except BaseException as exc:  # shown on the story page; the run row has it too
+            except BaseException as exc:
                 self.errors[story_id] = f"{type(exc).__name__}: {exc}"
 
         threading.Thread(target=work, name=f"story-{story_id}", daemon=True).start()
@@ -115,7 +113,7 @@ class Engine:
             return Command(resume=decision)
         if current["state"] == "not_started":
             return {"story_id": story_id}
-        return None  # carry on from the last checkpoint
+        return None
 
     def _run(self, story_id: int, payload: Any) -> dict[str, Any]:
         try:

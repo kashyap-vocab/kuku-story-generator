@@ -12,7 +12,6 @@
   {% if last_ep and ep < last_ep %}<a href="/stories/{{ story.id }}/episodes/{{ ep + 1 }}">Episode {{ ep + 1 }} →</a>{% endif %}
 </nav>
 
-{# ---- the model sorted the reviewer's note: confirm how it is used #}
 {% if confirming %}
 {% set f = confirming.feedback %}
 <section class="card" id="confirm" style="border-left: 4px solid var(--accent)">

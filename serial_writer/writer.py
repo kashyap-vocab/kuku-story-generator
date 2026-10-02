@@ -49,7 +49,6 @@ class Writer:
         self.conn = conn
         self.llm = llm
 
-    # ------------------------------------------------------------ draft
 
     def draft(self, story_id: int, ep: int, pv: int, note: str | None, since: str, run_id: int | None) -> int:
         """Build the memory pack, outline, draft. Returns the new version id."""
@@ -62,7 +61,6 @@ class Writer:
                                  self._ctx("draft", story_id, ep, run_id, since),
                                  temperature=0.8, max_tokens=1600).text.strip()
         with transaction(self.conn):
-            # A draft left over from a crash is replaced, never reused half-checked.
             self.conn.execute(
                 "UPDATE episode_versions SET status = 'superseded' WHERE story_id = ? AND ep_no = ? AND status IN ('draft', 'in_review')",
                 (story_id, ep),
@@ -86,7 +84,6 @@ class Writer:
              to_json(outline) if outline else None),
         ).lastrowid
 
-    # ------------------------------------------------------------ check
 
     def check(self, story_id: int, vid: int, since: str, run_id: int | None) -> dict[str, Any]:
         """Code checks, then the continuity and plan checks in parallel. Saves and returns the report."""
@@ -127,7 +124,6 @@ class Writer:
             out.append(_problem("cliche", "Stock phrases: " + "; ".join(found), "must_fix", source="code", quote=found[0]))
         elif found:
             out.append(_problem("cliche", f"Stock phrase: {found[0]}", "minor", source="code", quote=found[0]))
-        # Dead people speaking. A ghost story may allow it, so the human decides.
         for name, s in character_states(self.conn, story_id, ep).items():
             if s["status"] != "dead":
                 continue
@@ -161,7 +157,6 @@ class Writer:
 
         problems: list[dict[str, Any]] = []
         dropped: list[dict[str, Any]] = []
-        # Continuity: both quotes must be real, or the complaint is dropped.
         for i in cont.issues:
             if contains_quote(text, i.quote) and contains_quote(pack, i.clashes_with):
                 problems.append(_problem("continuity", f"{i.note} (memory says: \"{i.clashes_with}\")",
@@ -174,7 +169,6 @@ class Writer:
             what = dict(items)[r.item]
             quoted = contains_quote(text, r.quote)
             if r.item.startswith("instruction_"):
-                # Breaking a human instruction blocks only when the model can show where.
                 sev = "must_fix" if r.verdict == "no" and quoted else "minor"
             elif r.item == "plan_line":
                 sev = "must_fix" if r.verdict == "no" else "minor"
@@ -203,7 +197,6 @@ class Writer:
                 picked.append(e)
         return picked[-15:]
 
-    # ------------------------------------------------------------ revise
 
     def revise(self, story_id: int, vid: int, since: str, run_id: int | None) -> int | None:
         """Rewrite to fix the must-fix problems. Returns the new version id, or None if
@@ -226,13 +219,11 @@ class Writer:
                  detail={"from": vid, "to": new, "fixing": [p["message"] for p in must]})
         return new
 
-    # ------------------------------------------------------------ remember
 
     def extract(self, story_id: int, vid: int, run_id: int | None) -> dict[str, Any]:
         """Pull memory updates out of the final text and store them against this version."""
         v = self._version(vid)
         ep, pv = v["ep_no"], v["plan_version_id"]
-        # A re-run replaces this version's earlier, unapproved updates.
         with transaction(self.conn):
             self._forget_version(vid)
         names = [c["name"] for c in self._cast(story_id, pv)]
@@ -254,7 +245,6 @@ class Writer:
             self.conn.execute(f"DELETE FROM {table} WHERE source_version_id = ?", (vid,))
         self.conn.execute("DELETE FROM threads WHERE source_version_id = ? AND id NOT IN (SELECT thread_id FROM thread_events)", (vid,))
 
-    # ------------------------------------------------------------ review
 
     def needs_review(self, story_id: int, vid: int) -> tuple[bool, str]:
         v = self._version(vid)
@@ -303,7 +293,6 @@ class Writer:
             )
             self._feedback(story_id, v, "reject", reason, classification)
 
-    # ------------------------------------------------------------ summaries
 
     def summarize_finished_arcs(self, story_id: int, pv: int, run_id: int | None) -> list[int]:
         """Summarise every finished arc that has no current summary (new, or made stale by a change).
@@ -324,7 +313,6 @@ class Writer:
             made.append(sid)
         return made
 
-    # ------------------------------------------------------------ feedback
 
     def sort_feedback(self, story_id: int, vid: int, text: str, run_id: int | None) -> dict[str, Any]:
         """The model's guess at what kind of feedback this is. The human confirms it."""
@@ -336,7 +324,6 @@ class Writer:
                                                   run_id=run_id, budgeted=False),
                                       temperature=0.0, max_tokens=500).model_dump()
         except LLMError as exc:
-            # The human sorts it themselves.
             out = {"kind": "lasting_instruction", "instruction": text, "instruction_kind": "other",
                    "why": f"could not sort automatically ({exc})"}
         with transaction(self.conn):
@@ -382,9 +369,6 @@ class Writer:
                 return {"rewrite": instruction, "plan_version_id": pv}
             return {"rewrite": None, "plan_version_id": pv}
 
-        # Story change: the rest of this arc is re-planned around it, and this
-        # episode is written again to make it happen. It carries forward through
-        # the plan and, once approved, through memory (e.g. the character is dead).
         new_pv, changed = self.replan_rest_of_arc(story_id, pv, ep, instruction, run_id)
         self.reject(story_id, vid, instruction, {"feedback_id": sorted_fb["feedback_id"], **confirmed,
                                                  "new_plan_version_id": new_pv})
@@ -440,7 +424,6 @@ class Writer:
              to_json(detail) if detail is not None else None),
         ).lastrowid
 
-    # ------------------------------------------------------------ helpers
 
     def _version(self, vid: int) -> sqlite3.Row:
         return self.conn.execute("SELECT * FROM episode_versions WHERE id = ?", (vid,)).fetchone()

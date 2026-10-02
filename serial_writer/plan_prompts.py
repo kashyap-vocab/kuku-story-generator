@@ -31,9 +31,6 @@ def _note(note: str | None) -> str:
     return f"\nTHE REVIEWER ASKED FOR THIS. IT OVERRIDES EVERYTHING ELSE:\n{note}\n"
 
 
-# ---------------------------------------------------------------- rendering
-
-
 def render_bible(b: dict[str, Any], *, with_truth: bool = True) -> str:
     lines = [
         f"TITLE: {b['title']}",
@@ -103,9 +100,6 @@ def render_thread_status(status: list[dict[str, Any]], at_ep: int) -> str:
         else:
             out.append(f"- [{t['key']}] NOT OPENED YET: {t['question']}")
     return "\n".join(out)
-
-
-# ---------------------------------------------------------------- prompts
 
 
 def bible_prompt(premise: str, total_episodes: int, note: str | None, size: StorySize) -> list[dict[str, str]]:
@@ -198,7 +192,6 @@ def beats_prompt(
     note: str | None,
 ) -> list[dict[str, str]]:
     prev = (
-        # Only its last few lines: enough to continue from, too little to copy.
         f"PREVIOUS ARC {prev_arc['arc_no']}: {prev_arc['title']}: {prev_arc['goal']}\n"
         f"It ends like this (continue from here; NEVER copy or reuse these lines):\n{render_beats(prev_beats[-3:])}"
         if prev_arc else "(this is the first arc)"

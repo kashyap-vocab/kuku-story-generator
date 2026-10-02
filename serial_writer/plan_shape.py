@@ -46,7 +46,6 @@ class StorySize:
     cast: tuple[int, int]
     major_min: int
     threads: tuple[int, int]
-    # New subplots and new people each arc may add on top of the story rules.
     arc_extras: int
 
 
@@ -55,7 +54,6 @@ def story_size(total_episodes: int) -> StorySize:
     f = min(total_episodes, 200) / 200
     cast, threads = round(3 + 8 * f), round(2 + 6 * f)
     return StorySize(
-        # Five acts need at least four episodes each to set up and turn.
         acts=3 if total_episodes < 20 else 5,
         cast=(max(3, cast - 1), min(12, cast + 1)),
         major_min=2 if total_episodes < 20 else 3,

@@ -73,9 +73,7 @@ def test_edits_are_collected_then_sent_as_one_new_version(web):
                                                           "turning_point": act["turning_point"]})
     plan = client.get(f"/stories/{sid}/plan").text
     assert "2 changes not saved yet" in plan and ">changed<" in plan
-    # Nothing is written until the edits are sent.
     assert load_beats(engine.conn, pv, 3, 3)[0]["beat"] == beat["beat"]
-    # Approving with unsent edits is refused.
     assert "unsent" in client.post(f"/stories/{sid}/plan/approve", data={}).headers["location"]
 
     r = client.post(f"/stories/{sid}/plan/edits/send", data={"note": "sharper start"})
@@ -97,7 +95,6 @@ def test_bad_edit_comes_back_as_an_error(web):
     client.post(f"/stories/{sid}/plan/edit/beat/2", data={"beat": "x", "characters": "Nobody"})
     client.post(f"/stories/{sid}/plan/edits/send", data={})
     status = _wait(engine, sid)
-    # The graph refuses it and asks again; the page shows why.
     assert status["waiting_for"]["plan_version_id"] == pv
     assert "Nobody" in client.get(f"/stories/{sid}").text
 
@@ -115,7 +112,6 @@ def test_redo_needs_a_note_and_approve_starts_writing(web):
     client.post(f"/stories/{sid}/plan/approve", data={"note": "good"})
     _wait(engine, sid)
     assert engine.conn.execute("SELECT status FROM stories WHERE id = ?", (sid,)).fetchone()[0] == "writing"
-    # The approved plan is still viewable, without the review controls.
     plan = client.get(f"/stories/{sid}/plan").text
     assert "approved" in plan and "Approve the plan" not in plan
     assert client.post(f"/stories/{sid}/plan/approve", data={}).status_code == 409
@@ -146,7 +142,6 @@ def test_episode_review_feedback_and_memory_pages(web_writing):
     assert "Approve and continue" in page and "What the story will remember if you approve" in page
     assert "Door 3 opens only after two knocks." in page and "What the model knew" in page
 
-    # Feedback: sorted by the model, confirmed by the human, then it carries forward.
     client.post(f"/stories/{sid}/episodes/1/decide", data={"action": "feedback", "feedback": "slow down the romance"})
     assert _wait(engine, sid)["waiting_for"]["kind"] == "feedback_confirm"
     page = client.get(f"/stories/{sid}/episodes/1").text
@@ -160,7 +155,6 @@ def test_episode_review_feedback_and_memory_pages(web_writing):
     status = _wait(engine, sid)
     assert status["waiting_for"]["ep_no"] == 2
     assert "No kissing yet." in _drafts_for(fake, 2)[-1]["messages"][-1]["content"]
-    # Deciding on an episode that isn't waiting is refused.
     assert "error=" in client.post(f"/stories/{sid}/episodes/1/decide", data={"action": "approve"}).headers["location"]
 
     client.post(f"/stories/{sid}/episodes/2/decide", data={"action": "reject", "reason": "Too calm."})
@@ -175,9 +169,8 @@ def test_episode_review_feedback_and_memory_pages(web_writing):
     did = engine.conn.execute("SELECT id FROM directives").fetchone()[0]
     client.post(f"/stories/{sid}/directives/{did}", data={"status": "paused", "reason": "romance arc starts"})
     assert "paused" in client.get(f"/stories/{sid}/memory").text
-    assert "No kissing yet." not in client.get(f"/stories/{sid}").text  # no longer a standing instruction
+    assert "No kissing yet." not in client.get(f"/stories/{sid}").text
 
-    # Old versions stay viewable.
     v1 = engine.conn.execute("SELECT id FROM episode_versions WHERE ep_no = 2 AND status = 'rejected'").fetchone()[0]
     assert "rejected" in client.get(f"/stories/{sid}/episodes/2?v={v1}").text
 
@@ -190,7 +183,7 @@ def test_review_setting_can_change_any_time(web):
     sid, pv = _new_story(engine, client)
     client.post(f"/stories/{sid}/review", data={"review_mode": "every_n", "every_n": 3})
     rows = engine.conn.execute("SELECT mode, every_n FROM review_settings WHERE story_id = ? ORDER BY id", (sid,)).fetchall()
-    assert [tuple(r) for r in rows] == [("every_episode", None), ("every_n", 3)]  # history kept
+    assert [tuple(r) for r in rows] == [("every_episode", None), ("every_n", 3)]
     assert 'value="every_n" selected' in client.get(f"/stories/{sid}").text
     assert "error=" in client.post(f"/stories/{sid}/review", data={"review_mode": "sometimes"}).headers["location"]
 
@@ -201,11 +194,9 @@ def test_request_changes_with_a_chosen_scope_and_edit_mode(web_writing):
     client.post(f"/stories/{sid}/plan/approve", data={"write_until": 2})
     _wait(engine, sid)
 
-    # Edit mode shows the text in a box, with save and cancel.
     page = client.get(f"/stories/{sid}/episodes/1?edit=1").text
     assert 'name="text"' in page and "Save my version and approve" in page
 
-    # "This and every episode after it": no confirm step, rewritten, kept for later episodes.
     client.post(f"/stories/{sid}/episodes/1/decide",
                 data={"action": "feedback", "feedback": "Shorter scenes.", "kind": "lasting_instruction"})
     status = _wait(engine, sid)
@@ -228,7 +219,6 @@ def test_usage_dashboard_shows_tokens_and_latency(web):
     engine, client = web
     sid, _ = _new_story(engine, client)
 
-    # Every story page carries the side panel, which loads the numbers itself.
     assert f'hx-get="/stories/{sid}/dashboard"' in client.get(f"/stories/{sid}").text
     panel = client.get(f"/stories/{sid}/dashboard")
     assert panel.status_code == 200

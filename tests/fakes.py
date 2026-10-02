@@ -11,7 +11,6 @@ from typing import Any, Callable
 from .conftest import make_response
 
 
-# Shared across calls, so no two fake answers ever contain the same string.
 _COUNTER = itertools.count(1)
 
 
@@ -32,7 +31,6 @@ def instance(schema: dict[str, Any], defs: dict[str, Any] | None = None, counter
         props = schema.get("properties", {})
         return {k: instance(v, defs, counter) for k, v in props.items()}
     if kind == "array":
-        # Exactly minItems when given, otherwise one item (if allowed).
         n = schema.get("minItems", 1 if schema.get("maxItems", 1) > 0 else 0)
         return [instance(schema["items"], defs, counter) for _ in range(n)]
     if kind == "integer":
@@ -42,7 +40,7 @@ def instance(schema: dict[str, Any], defs: dict[str, Any] | None = None, counter
     if kind == "boolean":
         return False
     n = next(counter)
-    text = f"text{n} note{n} line{n}"  # unique words, so fake lines never look like copies
+    text = f"text{n} note{n} line{n}"
     while len(text) < schema.get("minLength", 0):
         text += f" more{n}"
     return text

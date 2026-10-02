@@ -22,7 +22,6 @@ from .plan_store import (
 from .similarity import contains_quote as _contains, near_copies, norm as _norm
 from .tracing import log_step
 
-# A thread or main character quiet for longer than this gets flagged.
 THREAD_QUIET_EPS = 30
 MAJOR_ABSENT_EPS = 40
 MAX_PARALLEL = 5
@@ -36,7 +35,6 @@ def code_checks(conn: sqlite3.Connection, pv: int, total: int) -> list[dict[str,
     out: list[dict[str, Any]] = []
     beats = load_beats(conn, pv)
 
-    # Every episode planned exactly once, and inside an arc and an act.
     eps = [b["ep_no"] for b in beats]
     missing = sorted(set(range(1, total + 1)) - set(eps))
     if missing:
@@ -46,8 +44,6 @@ def code_checks(conn: sqlite3.Connection, pv: int, total: int) -> list[dict[str,
         if sorted(covered) != list(range(1, total + 1)):
             out.append(problem("coverage", [], f"{label}s don't cover episodes 1-{total} exactly once", "must_fix"))
 
-    # Plan lines only use people and threads the plan knows about. (A redo can
-    # remove an arc's new characters or subplots that later lines still use.)
     names = {c["name"] for c in load_cast(conn, pv)}
     keys = {t["key"] for t in load_threads(conn, pv)}
     for b in beats:
@@ -58,12 +54,10 @@ def code_checks(conn: sqlite3.Connection, pv: int, total: int) -> list[dict[str,
             if m["key"] not in keys:
                 out.append(problem("thread", [b["ep_no"]], f"Thread [{m['key']}] does not exist", "must_fix", key=m["key"]))
 
-    # Copied plan lines.
     for ep, src, score in near_copies([(b["ep_no"], b["beat"]) for b in beats], []):
         out.append(problem("repetition", [src, ep], f"Ep {ep} is nearly a copy of ep {src} "
                            f"({int(score * 100)}% the same words)", "must_fix"))
 
-    # Threads: opened before they move, nothing after resolving, not left quiet too long.
     for t in load_threads(conn, pv):
         moves = [(b["ep_no"], m["event"]) for b in beats for m in b["threads"] if m["key"] == t["key"]]
         name = f"'{t['title']}' [{t['key']}]"
@@ -72,7 +66,6 @@ def code_checks(conn: sqlite3.Connection, pv: int, total: int) -> list[dict[str,
             continue
         found, state = thread_lifecycle(moves)
         out += [problem("thread", [ep], f"Thread {name} {msg}", sev, key=t["key"]) for ep, sev, msg in found]
-        # Long silences while the thread is still open (up to its first resolve).
         resolved_at = next((i for i, (_, e) in enumerate(moves) if e == "resolve"), len(moves) - 1)
         live = moves[: resolved_at + 1]
         for (a, _), (b, _) in zip(live, live[1:]):
@@ -85,7 +78,6 @@ def code_checks(conn: sqlite3.Connection, pv: int, total: int) -> list[dict[str,
             else:
                 out.append(problem("thread", [last], f"Thread {name} is still open at the end of the story", "minor", key=t["key"]))
 
-    # Major characters: they show up, and don't vanish for too long.
     for c in load_cast(conn, pv):
         if c["importance"] != "major":
             continue
@@ -99,8 +91,6 @@ def code_checks(conn: sqlite3.Connection, pv: int, total: int) -> list[dict[str,
     return out
 
 
-# How an act-review issue counts. Logic and character breaks must be fixed;
-# pacing and hooks are the reviewer's call.
 ISSUE_SEVERITY = {"logic": "must_fix", "character": "must_fix", "pacing": "minor", "hook": "minor"}
 
 
@@ -140,8 +130,6 @@ def model_checks(
     found: list[dict[str, Any]] = []
     dropped = 0
 
-    # Story rules: a clash only counts if the quoted words really are in the rules,
-    # and aren't just the item quoting itself.
     rules_text = P.render_bible(bible)
     item_text = dict(items)
     try:

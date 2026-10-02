@@ -18,7 +18,6 @@ from .plan_prompts import render_bible
 from .plan_store import load_acts, load_arcs, load_beats, load_bible, load_threads
 from .similarity import contains_quote, words
 
-# Layer sizes. The pack is about the same size at episode 5 and episode 150.
 RECENT_ONE_LINERS = 5
 STORY_SO_FAR_MAX = 40
 THREAD_OVERDUE_EPS = 15
@@ -27,9 +26,6 @@ LOOKUP_FACTS = 15
 RECENT_FACT_EPS = 3
 LOOKUP_KEY_LINES = 8
 KNOWS_SHOWN = 6
-
-
-# ---------------------------------------------------------------- reading
 
 
 def approved_episodes(conn: sqlite3.Connection, story_id: int, before_ep: int | None = None) -> list[dict[str, Any]]:
@@ -111,7 +107,7 @@ def summaries(conn: sqlite3.Connection, story_id: int, before_ep: int) -> list[d
 
 def proposed_memory(conn: sqlite3.Connection, version_id: int) -> dict[str, list[dict[str, Any]]]:
     """What approving this version would add to memory, for the reviewer."""
-    q = lambda sql: [dict(r) for r in conn.execute(sql, (version_id,))]  # noqa: E731
+    q = lambda sql: [dict(r) for r in conn.execute(sql, (version_id,))]
     return {
         "states": q("""SELECT c.name, cs.* FROM character_states cs JOIN characters c ON c.id = cs.character_id
                        WHERE cs.source_version_id = ? ORDER BY cs.id"""),
@@ -127,9 +123,6 @@ def proposed_memory(conn: sqlite3.Connection, version_id: int) -> dict[str, list
     }
 
 
-# ---------------------------------------------------------------- the memory pack
-
-
 def build_pack(conn: sqlite3.Connection, story_id: int, ep: int, pv: int) -> tuple[str, dict[str, list[int]]]:
     """The fixed-size slice of memory the model gets for episode `ep`, picked by code.
 
@@ -142,14 +135,12 @@ def build_pack(conn: sqlite3.Connection, story_id: int, ep: int, pv: int) -> tup
                                   "thread_events": [], "key_lines": [], "summaries": [], "directives": []}
     parts: list[str] = []
 
-    # 1. Rules: story rules, the hidden truth, and every active human instruction.
     parts.append("=== STORY RULES ===\n" + render_bible(bible))
     active = directives(conn, story_id)
     refs["directives"] = [d["id"] for d in active]
     parts.append("=== HUMAN INSTRUCTIONS (always follow these; they override the plan) ===\n" + (
         "\n".join(f"- {d['text']}" for d in active) if active else "(none)"))
 
-    # 2. Plan: where we are, this episode's line, and the ones around it.
     act = next(a for a in load_acts(conn, pv) if a["start_ep"] <= ep <= a["end_ep"])
     arc = next(a for a in load_arcs(conn, pv) if a["start_ep"] <= ep <= a["end_ep"])
     beats = {b["ep_no"]: b for b in load_beats(conn, pv, ep - 2, ep + 3)}
@@ -166,7 +157,6 @@ def build_pack(conn: sqlite3.Connection, story_id: int, ep: int, pv: int) -> tup
         + "\n".join(plan_lines)
     )
 
-    # 3. Summaries: finished arcs, then one line per episode not covered by one.
     done = approved_episodes(conn, story_id, ep)
     arc_sums = summaries(conn, story_id, ep)
     refs["summaries"] = [s["id"] for s in arc_sums]
@@ -177,7 +167,6 @@ def build_pack(conn: sqlite3.Connection, story_id: int, ep: int, pv: int) -> tup
     so_far += [f"Ep {e['ep_no']}: {e['one_line']}" for e in older]
     parts.append("=== THE STORY SO FAR ===\n" + ("\n".join(so_far) if so_far else "(nothing before the recent episodes)"))
 
-    # 4. Recent: one-liners for the episodes just before, the last one in full.
     recent = [e for e in done if e["ep_no"] >= recent_from]
     refs["episodes"] = [e["id"] for e in recent]
     if recent:
@@ -188,7 +177,6 @@ def build_pack(conn: sqlite3.Connection, story_id: int, ep: int, pv: int) -> tup
     else:
         parts.append("=== RECENT EPISODES ===\n(this is the first episode)")
 
-    # 5. Who and what is in this episode: character states, relationships, threads.
     beat = beats.get(ep) or {"characters": [], "threads": []}
     states = character_states(conn, story_id, ep)
     names = list(beat["characters"])
@@ -237,7 +225,6 @@ def build_pack(conn: sqlite3.Connection, story_id: int, ep: int, pv: int) -> tup
         section.append("MAIN CHARACTERS NOT SEEN FOR A WHILE: " + ", ".join(absent))
     parts.append("\n".join(section))
 
-    # 6. Looked up: older facts and key lines about these people and threads.
     terms = names + [n.split()[0] for n in names if " " in n] + \
         [plan_threads[k]["title"] for k in in_beat if k in plan_threads]
     facts = _lookup_facts(conn, story_id, ep, terms, f"{beat.get('beat', '')} {beat.get('hook', '')}")
@@ -290,9 +277,6 @@ def save_context(conn: sqlite3.Connection, story_id: int, ep: int, pv: int, pack
     ).lastrowid
 
 
-# ---------------------------------------------------------------- saving what an episode adds
-
-
 def save_memory(
     conn: sqlite3.Connection, story_id: int, ep: int, version_id: int, text: str, ext: dict[str, Any],
     plan_threads: dict[str, dict[str, Any]],
@@ -317,7 +301,6 @@ def save_memory(
         if not name or not proven("new_character", c):
             continue
         if name in ids:
-            # Known name: only re-own it if it came from an episode that isn't live.
             conn.execute(
                 """UPDATE characters SET source_version_id = ?, first_ep = ? WHERE id = ? AND source_version_id IS NOT NULL
                    AND source_version_id NOT IN (SELECT id FROM episode_versions WHERE status = 'approved')""",
@@ -421,14 +404,10 @@ def approve_version(conn: sqlite3.Connection, story_id: int, version_id: int) ->
         "UPDATE episode_versions SET status = 'approved', decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
         (version_id,),
     )
-    # A summary covering this episode was written from the old version: rebuild it.
     conn.execute(
         "UPDATE summaries SET stale = 1 WHERE story_id = ? AND ? BETWEEN start_ep AND end_ep AND stale = 0",
         (story_id, ep),
     )
-
-
-# ---------------------------------------------------------------- arc summaries
 
 
 def arcs_to_summarize(conn: sqlite3.Connection, story_id: int, pv: int) -> list[dict[str, Any]]:

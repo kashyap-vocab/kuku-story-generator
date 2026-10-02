@@ -22,7 +22,6 @@ from .tracing import CallRecord, episode_tokens_used, log_call, log_step
 
 T = TypeVar("T", bound=BaseModel)
 
-# Errors worth retrying: the server was busy, slow or briefly down.
 _TRANSIENT = (
     openai.APIConnectionError,
     openai.APITimeoutError,
@@ -56,10 +55,7 @@ class CallContext:
     story_id: int | None = None
     ep_no: int | None = None
     run_id: int | None = None
-    # The episode budget counts tokens since this time (the start of the current
-    # writing attempt), so a human asking for a rewrite starts a fresh budget.
     budget_since: str | None = None
-    # Off for steps that must finish once the writing is done (saving memory).
     budgeted: bool = True
 
 
@@ -73,7 +69,6 @@ class LLMClient:
     ) -> None:
         self.settings = settings
         self.conn = conn
-        # The SDK's own retries are off; we retry here so every attempt is logged.
         self.client = client or openai.OpenAI(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
@@ -81,7 +76,6 @@ class LLMClient:
             max_retries=0,
         )
         self._sleep = sleep
-        # Checks run in parallel threads that share one connection; writes take turns.
         self._db_lock = threading.Lock()
 
     def complete(
@@ -116,7 +110,6 @@ class LLMClient:
         )
         return parsed
 
-    # ------------------------------------------------------------------ internals
 
     def _call(
         self,
@@ -154,11 +147,9 @@ class LLMClient:
                 self._log(rec)
                 last_error = rec.error
                 if attempt < attempts:
-                    # 5 s, then 15 s: long enough to ride out a network blip or a server restart.
                     self._sleep(5 * 3 ** (attempt - 1))
                 continue
             except openai.APIError as exc:
-                # Bad request, auth, unknown model: retrying will not help.
                 rec.latency_ms = _ms_since(started)
                 rec.status, rec.error = "error", f"{type(exc).__name__}: {exc}"
                 self._log(rec)

@@ -11,8 +11,6 @@ from typing import Any, Iterator
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 SCHEMA_VERSION = 2
 
-# Changes to tables that already exist in older databases. New tables need no
-# entry: the schema script creates whatever is missing.
 MIGRATIONS: dict[int, list[str]] = {
     2: [
         "ALTER TABLE episode_versions ADD COLUMN context_id INTEGER REFERENCES episode_contexts(id)",
@@ -28,13 +26,10 @@ def connect(path: Path | str) -> sqlite3.Connection:
     """Open the story database with the settings every connection needs."""
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    # Autocommit mode; multi-statement writes go through `transaction()`.
     conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    # WAL lets the web app read while the writer is generating.
     conn.execute("PRAGMA journal_mode = WAL")
-    # Wait rather than fail if another connection is briefly writing.
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 

@@ -38,7 +38,6 @@ def test_episode_text_cannot_be_overwritten_or_deleted(conn):
         conn.execute("UPDATE episode_versions SET text = 'new' WHERE id = ?", (ev,))
     with pytest.raises(sqlite3.IntegrityError, match="never deleted"):
         conn.execute("DELETE FROM episode_versions WHERE id = ?", (ev,))
-    # Moving the status on is allowed.
     conn.execute("UPDATE episode_versions SET status = 'approved' WHERE id = ?", (ev,))
 
 
@@ -62,7 +61,6 @@ def test_human_records_are_append_only(conn):
     conn.execute("INSERT INTO directive_status (directive_id, status, reason) VALUES (?, 'paused', 'arc 3')", (d,))
     row = conn.execute("SELECT status, status_reason FROM current_directives WHERE id = ?", (d,)).fetchone()
     assert (row["status"], row["status_reason"]) == ("paused", "arc 3")
-    # Full history is still there.
     assert conn.execute("SELECT COUNT(*) FROM directive_status").fetchone()[0] == 2
 
 
@@ -78,7 +76,6 @@ def test_memory_only_counts_from_approved_episodes(conn):
     live = {r["text"] for r in conn.execute("SELECT text FROM live_facts")}
     assert live == {"the shop is on Elm St", "rule from the bible"}
 
-    # Rejecting the approved episode removes its memory without deleting anything.
     conn.execute("UPDATE episode_versions SET status = 'rejected' WHERE id = ?", (approved,))
     live = {r["text"] for r in conn.execute("SELECT text FROM live_facts")}
     assert live == {"rule from the bible"}

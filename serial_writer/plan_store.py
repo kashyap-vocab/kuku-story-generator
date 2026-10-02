@@ -13,8 +13,6 @@ from typing import Any
 
 from .db import to_json
 
-# ---------------------------------------------------------------- story rules
-
 
 def save_bible(
     conn: sqlite3.Connection, story_id: int, bible: dict[str, Any], *, created_by: str,
@@ -64,9 +62,6 @@ def upsert_character(
     return conn.execute(
         "SELECT id FROM characters WHERE story_id = ? AND name = ?", (story_id, name)
     ).fetchone()["id"]
-
-
-# ---------------------------------------------------------------- plan versions
 
 
 def new_plan_version(
@@ -165,9 +160,6 @@ def copy_plan(
                 "INSERT INTO plan_character_arcs (plan_version_id, character_id, arc, source) VALUES (?, ?, ?, ?)",
                 (dst, c["character_id"], c["arc"], c["source"]),
             )
-
-
-# ---------------------------------------------------------------- loading
 
 
 def load_acts(conn: sqlite3.Connection, pv: int) -> list[dict[str, Any]]:

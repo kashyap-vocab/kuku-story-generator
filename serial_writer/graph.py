@@ -32,23 +32,17 @@ from .writer import EpisodeDecisionError, Writer, now
 class StoryState(TypedDict, total=False):
     story_id: int
     plan_version_id: int | None
-    # Set while part of the plan is being rebuilt: {"target", "no", "note"}.
     redo: dict[str, Any] | None
     decision: dict[str, Any] | None
     review_error: str | None
     outcome: str | None
-    # The episode loop.
     write_until: int
     ep_no: int | None
     version_id: int | None
     revisions: int
-    # Start of the current writing attempt; the token budget counts from here.
     attempt_started: str | None
-    # A must-fix note for the next draft (a rejection or "fix this episode").
     rewrite_note: str | None
-    # The human edited the text themselves: approve once memory is extracted.
     human_edited: bool
-    # Feedback the model has sorted, waiting for the human to confirm.
     feedback: dict[str, Any] | None
 
 
@@ -127,11 +121,9 @@ def build_graph(
             return "check_plan"
         return {"bible": "setup", "all": "plan_acts", "act": "plan_arcs", "arc": "plan_beats"}[state["redo"]["target"]]
 
-    # ------------------------------------------------------------ episode loop
 
     def next_episode(state: StoryState, config: RunnableConfig) -> dict[str, Any]:
         sid = state["story_id"]
-        # A finished (or changed) arc is summarised before the story moves on.
         writer.summarize_finished_arcs(sid, state["plan_version_id"], _run_id(config))
         ep = next_episode_no(conn, sid)
         if ep > get_story(conn, sid)["total_episodes"]:
@@ -180,12 +172,11 @@ def build_graph(
 
     def revise_episode(state: StoryState, config: RunnableConfig) -> dict[str, Any]:
         new = writer.revise(state["story_id"], state["version_id"], state["attempt_started"], _run_id(config))
-        if new is None:  # out of budget: stop revising, the human sees it as it is
+        if new is None:
             return {"revisions": max_revisions}
         return {"version_id": new, "revisions": state["revisions"] + 1}
 
     def after_revise(state: StoryState) -> str:
-        # A new revision is always checked, so the human sees its real problems.
         return "check_episode" if _is_new(conn, state) else "extract_memory"
 
     def extract_memory(state: StoryState, config: RunnableConfig) -> dict[str, Any]:
@@ -232,7 +223,6 @@ def build_graph(
                     raise EpisodeDecisionError("the feedback is empty")
                 kind = d.get("kind")
                 if kind in ("fix_episode", "lasting_instruction", "story_change"):
-                    # The reviewer said where it applies: use it as given, and rewrite this episode with it.
                     return {"decision": {"kind": kind, "instruction": text, "rewrite": True},
                             "outcome": "feedback_chosen", "feedback": writer.record_feedback(sid, vid, text, kind)}
                 return {"decision": None, "outcome": "feedback",

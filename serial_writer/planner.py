@@ -33,7 +33,6 @@ class Planner:
         self.conn = conn
         self.llm = llm
 
-    # ------------------------------------------------------------ setup
 
     def setup(
         self, story_id: int, plan_version_id: int | None, redo: dict[str, Any] | None, run_id: int | None
@@ -46,7 +45,6 @@ class Planner:
             old_bible = self.conn.execute(
                 "SELECT bible_version_id FROM plan_versions WHERE id = ?", (plan_version_id,)
             ).fetchone()["bible_version_id"]
-            # If the new rules were already made before a crash, don't make them twice.
             if bible_id == old_bible:
                 bible_id = self._make_bible(story, redo.get("note"), run_id, reason="redo")
             with transaction(self.conn):
@@ -82,7 +80,6 @@ class Planner:
                  detail={"bible_version_id": bible_id, "cast": len(data["cast"]), "threads": len(data["threads"])})
         return bible_id
 
-    # ------------------------------------------------------------ acts
 
     def fill_acts(self, story_id: int, pv: int, note: str | None, run_id: int | None) -> None:
         if load_acts(self.conn, pv):
@@ -113,7 +110,6 @@ class Planner:
         log_step(self.conn, "plan_acts", "created", run_id=run_id, story_id=story_id,
                  detail={"plan_version_id": pv, "acts": len(spans)})
 
-    # ------------------------------------------------------------ arcs
 
     def fill_arcs(self, story_id: int, pv: int, note: str | None, run_id: int | None) -> None:
         acts = load_acts(self.conn, pv)
@@ -125,8 +121,6 @@ class Planner:
                 continue
             spans = spans_by_act[act["act_no"]]
             if len(spans) == 1:
-                # An act too short to split: its one arc is the act itself. No model call,
-                # and nothing for the two to disagree about.
                 with transaction(self.conn):
                     self.conn.execute(
                         """INSERT INTO plan_arcs (plan_version_id, arc_no, act_no, title, goal, turning_point,
@@ -174,8 +168,6 @@ class Planner:
         new_keys = []
         for t in arc.new_threads:
             key = thread_key(t.key or t.title)
-            # The model likes to "add" a thread that already exists; that only
-            # splits one question across two keys.
             if key in keys or _plain(t.title) in titles:
                 log_step(self.conn, "plan_arcs", "skipped_new_thread", run_id=run_id, story_id=story_id,
                          detail={"arc": arc_no, "key": key, "title": t.title, "why": "already exists"})
@@ -193,8 +185,6 @@ class Planner:
         for c in arc.new_characters:
             name = c.name.strip()
             plain = _plain(name)
-            # Also catches variants of an existing person, like "Sarah Vance (Voice Only)".
-            # Whole words only, so "Al" doesn't match "Alex".
             if not plain or any(f" {n} " in f" {plain} " or f" {plain} " in f" {n} " for n in cast):
                 log_step(self.conn, "plan_arcs", "skipped_new_character", run_id=run_id, story_id=story_id,
                          detail={"arc": arc_no, "name": name, "why": "empty or already in cast"})
@@ -208,7 +198,6 @@ class Planner:
             new_names.append(name)
         return {"new_threads": new_keys, "new_characters": new_names}
 
-    # ------------------------------------------------------------ plan lines
 
     def fill_beats(self, story_id: int, pv: int, note: str | None, run_id: int | None) -> None:
         acts = {a["act_no"]: a for a in load_acts(self.conn, pv)}
@@ -234,7 +223,6 @@ class Planner:
         earlier = load_beats(self.conn, pv, 1, arc["start_ep"] - 1)
         status = thread_status(threads, earlier, arc["start_ep"])
         state_before = {t["key"]: t["state"] for t in status}
-        # Code decides what the model may pick: no resolved threads, nobody before they arrive.
         usable_keys = [t["key"] for t in status if t["state"] != "resolved"]
         names = self._names_available(pv, bible, arc["arc_no"], arc["end_ep"])
         must_close = self._must_close(status, act, arc, next_arc)
@@ -262,14 +250,11 @@ class Planner:
             )
             self._tidy_thread_labels(story_id, arc["arc_no"], repaired.beats, state_before, run_id)
             left = self._beat_problems(repaired.beats, eps, state_before, must_close, earlier)
-            # Keep the rewrite unless it made the code-checked problems worse.
             if len(left) <= len(hard):
                 out = repaired
             else:
                 left = hard
             if any("nearly a copy" in p for p in left):
-                # A model asked to fix its own copy tends to copy again: it can see the
-                # copy. One fresh start, and code keeps whichever has fewer problems.
                 fresh = self.llm.structured(prompt, model, self._ctx("plan_beats_fresh", story_id, run_id),
                                             temperature=0.9, max_tokens=6000)
                 self._tidy_thread_labels(story_id, arc["arc_no"], fresh.beats, state_before, run_id)
@@ -305,7 +290,7 @@ class Planner:
         fixed = []
         for key, before in state_before.items():
             if before == "resolved":
-                continue  # the model can't pick these (code removed them from its choices)
+                continue
             moves = [m for b in beats for m in b.threads if m.key == key]
             if not moves:
                 continue
@@ -331,7 +316,6 @@ class Planner:
             c["name"] for c in load_cast(self.conn, pv)
             if available(c["source"], arc_no) and arrives.get(c["name"], 1) <= by_ep
         ]
-        # Never leave the model with nobody to pick.
         return names or [c["name"] for c in bible["cast"] if c["importance"] == "major"][:1]
 
     @staticmethod
@@ -355,7 +339,6 @@ class Planner:
     ) -> list[str]:
         """What code can tell for sure is wrong with an arc's plan lines."""
         closing = {t["key"] for t in must_close}
-        # Copies of earlier lines (the model sometimes copies the previous arc it was shown).
         out = [
             f"Ep {ep} is nearly a copy of ep {src} ({int(score * 100)}% the same words). Write a new event."
             for ep, src, score in near_copies(
@@ -396,7 +379,6 @@ class Planner:
                 problems.append(f"Ep {r.ep_no} repeats ep {r.closest_ep} ({r.what_is_alike}). Give it a different event.")
         return problems
 
-    # ------------------------------------------------------------ helpers
 
     def _bible_for(self, pv: int) -> dict[str, Any]:
         row = self.conn.execute("SELECT bible_version_id FROM plan_versions WHERE id = ?", (pv,)).fetchone()

@@ -80,7 +80,6 @@ def create_app(engine: Engine) -> FastAPI:
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.filters["plain_title"] = plain_title
-    # Changes whenever the stylesheet does, so browsers never show an old copy.
     templates.env.globals["css_v"] = int((HERE / "static" / "style.css").stat().st_mtime)
     pending = PendingEdits()
 
@@ -117,7 +116,6 @@ def create_app(engine: Engine) -> FastAPI:
             return back(to, str(exc))
         return back(f"/stories/{sid}")
 
-    # ------------------------------------------------------------ stories
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request, conn: sqlite3.Connection = Depends(db)):
@@ -148,7 +146,6 @@ def create_app(engine: Engine) -> FastAPI:
     def status_fragment(request: Request, sid: int, was: str = "", conn: sqlite3.Connection = Depends(db)):
         status = status_of(sid)
         resp = page(request, "_status.html", story=story_or_404(conn, sid), status=status, **_progress(conn, sid))
-        # The story moved on: take the reviewer straight to what needs them.
         if was and status["state"] != was:
             w = status.get("waiting_for") or {}
             target = {
@@ -176,7 +173,6 @@ def create_app(engine: Engine) -> FastAPI:
             return back(f"/stories/{sid}", str(exc))
         return back(f"/stories/{sid}")
 
-    # ------------------------------------------------------------ plan
 
     def plan_version(conn: sqlite3.Connection, sid: int) -> int:
         """The plan waiting for review, else the approved one, else the newest."""
@@ -322,7 +318,6 @@ def create_app(engine: Engine) -> FastAPI:
         return decide(sid, {"action": "approve", "note": note.strip() or None, "write_until": write_until},
                       f"/stories/{sid}/plan")
 
-    # ------------------------------------------------------------ writing controls
 
     @app.post("/stories/{sid}/write")
     def write_more(sid: int, until: int = Form(...)):
@@ -333,7 +328,6 @@ def create_app(engine: Engine) -> FastAPI:
                       conn: sqlite3.Connection = Depends(db)):
         story_or_404(conn, sid)
         try:
-            # Applies from the next episode written; older settings stay as history.
             set_review_setting(conn, sid, review_mode, every_n if review_mode == "every_n" else None,
                                effective_from_ep=next_episode_no(conn, sid))
         except ValueError as exc:
@@ -345,7 +339,6 @@ def create_app(engine: Engine) -> FastAPI:
         engine.request_stop(sid)
         return back(f"/stories/{sid}")
 
-    # ------------------------------------------------------------ episodes
 
     @app.get("/stories/{sid}/episodes/{ep}", response_class=HTMLResponse)
     def episode_page(request: Request, sid: int, ep: int, v: int | None = None, edit: int = 0,
@@ -401,7 +394,7 @@ def create_app(engine: Engine) -> FastAPI:
             decision["reason"] = reason.strip()
         elif action == "feedback":
             decision["text"] = feedback.strip()
-            if kind != "auto":  # the reviewer said where it applies
+            if kind != "auto":
                 decision["kind"] = kind
         else:
             raise HTTPException(400, "unknown action")
@@ -414,7 +407,6 @@ def create_app(engine: Engine) -> FastAPI:
                     "rewrite": rewrite == "yes"}
         return decide(sid, decision, f"/stories/{sid}/episodes/{ep}")
 
-    # ------------------------------------------------------------ memory
 
     @app.get("/stories/{sid}/memory", response_class=HTMLResponse)
     def memory_page(request: Request, sid: int, conn: sqlite3.Connection = Depends(db)):
@@ -448,7 +440,6 @@ def create_app(engine: Engine) -> FastAPI:
         row = conn.execute("SELECT id FROM directives WHERE id = ? AND story_id = ?", (did, sid)).fetchone()
         if row is None:
             raise HTTPException(404)
-        # A new status row; the old ones stay as history.
         conn.execute("INSERT INTO directive_status (directive_id, status, reason) VALUES (?, ?, ?)",
                      (did, status, reason.strip() or None))
         return back(f"/stories/{sid}/memory#instructions")

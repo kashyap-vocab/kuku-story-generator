@@ -16,9 +16,7 @@ _STOP = set(
     "must now off once only other same some still such through under very way well would".split()
 )
 
-# Plan lines this alike are copies, whatever the model says.
 COPY = 0.5
-# The model's "closest episode" pair counts as a repeat from this overlap up.
 REPEAT = 0.35
 
 

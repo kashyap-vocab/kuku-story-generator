@@ -43,9 +43,6 @@ def apply_plan_decision(
     return _redo(conn, story_id, pv, decision)
 
 
-# ---------------------------------------------------------------- approve
-
-
 def _approve(conn: sqlite3.Connection, story_id: int, pv: int, d: PlanDecision) -> None:
     plan = get_plan_version(conn, pv)
     with transaction(conn):
@@ -63,9 +60,6 @@ def _approve(conn: sqlite3.Connection, story_id: int, pv: int, d: PlanDecision) 
         set_status(conn, story_id, "writing")
 
 
-# ---------------------------------------------------------------- edit
-
-
 def _edit(conn: sqlite3.Connection, story_id: int, pv: int, ch: PlanChanges, note: str | None) -> int:
     plan = get_plan_version(conn, pv)
     acts = {a["act_no"] for a in load_acts(conn, pv)}
@@ -74,7 +68,6 @@ def _edit(conn: sqlite3.Connection, story_id: int, pv: int, ch: PlanChanges, not
     names = {c["name"] for c in load_cast(conn, pv)}
     keys = {t["key"] for t in load_threads(conn, pv)}
 
-    # Check everything before writing anything.
     bad = [f"act {n}" for n in ch.acts if n not in acts] + [f"arc {n}" for n in ch.arcs if n not in arcs]
     bad += [f"episode {n}" for n in ch.beats if n not in eps]
     for ep, b in ch.beats.items():
@@ -104,7 +97,6 @@ def _edit(conn: sqlite3.Connection, story_id: int, pv: int, ch: PlanChanges, not
                     )
         for no, e in ch.acts.items():
             _update(conn, "plan_acts", "act_no", new_pv, no, e.model_dump(exclude_none=True))
-            # An act's single arc is a copy of the act: keep the two the same.
             conn.execute(
                 """UPDATE plan_arcs SET title = a.title, goal = a.goal, turning_point = a.turning_point
                    FROM plan_acts a WHERE plan_arcs.plan_version_id = ? AND a.plan_version_id = ? AND a.act_no = ?
@@ -154,9 +146,6 @@ def _update(conn: sqlite3.Connection, table: str, key_col: str, pv: int, key: in
     )
 
 
-# ---------------------------------------------------------------- redo
-
-
 def _redo(conn: sqlite3.Connection, story_id: int, pv: int, d: PlanDecision) -> dict[str, Any]:
     if d.target is None:
         raise PlanDecisionError("redo needs a 'target': bible, all, act or arc")
@@ -172,7 +161,6 @@ def _redo(conn: sqlite3.Connection, story_id: int, pv: int, d: PlanDecision) -> 
     with transaction(conn):
         _feedback(conn, story_id, pv, "plan_redo", d.note, redo)
         if d.target == "bible":
-            # The new rules are made by the planner; it then starts a fresh plan.
             set_status(conn, story_id, "planning")
             return {"outcome": "redo", "plan_version_id": pv, "redo": redo}
         reason = d.note or f"redo {d.target} {d.no or ''}".strip()

@@ -83,11 +83,10 @@ def test_episode_budget_stops_further_calls(settings, conn):
     ctx = CallContext("draft", story_id=story, ep_no=5)
     fake = FakeOpenAI(make_response("a", 900, 200), make_response("b"))
     client = _client(settings, conn, fake)
-    client.complete([{"role": "user", "content": "x"}], ctx)  # uses 1100 of 1000
+    client.complete([{"role": "user", "content": "x"}], ctx)
     with pytest.raises(BudgetExceeded):
         client.complete([{"role": "user", "content": "x"}], ctx)
     assert len(fake.requests) == 1
-    # Another episode is unaffected.
     client.complete([{"role": "user", "content": "x"}], CallContext("draft", story_id=story, ep_no=6))
 
 
