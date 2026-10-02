@@ -3,10 +3,8 @@ services:
     build: .
     image: serial-writer:latest
     ports:
-      - "8000:8000"
+      - "8088:8088"
     env_file: .env
-    environment:
-      DB_PATH: /data/story.db
     volumes:
       - story-data:/data
     restart: unless-stopped

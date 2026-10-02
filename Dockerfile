@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DB_PATH=/data/story.db
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -14,6 +14,7 @@ COPY serial_writer ./serial_writer
 RUN useradd --create-home --uid 1000 app && mkdir /data && chown app:app /data
 USER app
 
+WORKDIR /data
 VOLUME /data
 EXPOSE 8000
 
