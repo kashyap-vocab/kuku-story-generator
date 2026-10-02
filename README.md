@@ -117,6 +117,24 @@ docs/ARCHITECTURE.md        design and reasoning
 tests/                      fake-model tests, no server needed
 ```
 
+## Docker
+
+```bash
+cp .env.example .env               # set LLM_BASE_URL and LLM_MODEL
+docker compose up -d --build       # http://localhost:8000
+```
+
+Or without compose:
+
+```bash
+docker build -t serial-writer .
+docker run -d -p 8000:8000 --env-file .env -v story-data:/data serial-writer
+```
+
+Stories, plans and logs live in the `/data` volume, so they survive restarts.
+The model server in `.env` must be reachable from inside the container (use the
+host's address, not `localhost`).
+
 ## Tests
 
 ```bash
