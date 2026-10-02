@@ -131,6 +131,12 @@ docker build -t serial-writer .
 docker run -d -p 8000:8000 --env-file .env -v story-data:/data serial-writer
 ```
 
+A prebuilt image is on Docker Hub:
+
+```bash
+docker run -d -p 8000:8000 --env-file .env -v story-data:/data kashyapsai2003/kuku-story:latest
+```
+
 Stories, plans and logs live in the `/data` volume, so they survive restarts.
 The model server in `.env` must be reachable from inside the container (use the
 host's address, not `localhost`).
