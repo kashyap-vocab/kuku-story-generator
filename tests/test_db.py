@@ -19,7 +19,7 @@ def _episode(conn, story_id, ep_no, version, status="draft") -> int:
 
 def test_init_is_repeatable(conn):
     init_db(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 

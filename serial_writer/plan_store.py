@@ -34,6 +34,7 @@ def save_bible(
     ).lastrowid
     for c in bible["cast"]:
         upsert_character(conn, story_id, c["name"], c["role"], c["description"], c["importance"])
+    conn.execute("UPDATE stories SET title = ? WHERE id = ?", (bible.get("title"), story_id))
     return bible_id
 
 

@@ -8,7 +8,6 @@ really there are dropped. Nothing is fixed silently: problems go to the reviewer
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -20,7 +19,7 @@ from .plan_models import act_review_model, rules_review_model
 from .plan_store import (
     load_acts, load_arcs, load_beats, load_bible, load_cast, load_threads, thread_lifecycle,
 )
-from .similarity import near_copies
+from .similarity import contains_quote as _contains, near_copies, norm as _norm
 from .tracing import log_step
 
 # A thread or main character quiet for longer than this gets flagged.
@@ -185,12 +184,3 @@ def run_plan_check(
              detail={"plan_version_id": pv, "code": len(code), "model": len(model), "dropped": dropped})
     return report
 
-
-def _norm(text: str) -> str:
-    text = text.casefold().replace("’", "'").replace("“", '"').replace("”", '"')
-    return re.sub(r"\s+", " ", text).strip(" \"'.,;:!?")
-
-
-def _contains(haystack: str, quote: str) -> bool:
-    q = _norm(quote)
-    return bool(q) and q in _norm(haystack)

@@ -104,6 +104,13 @@ def _edit(conn: sqlite3.Connection, story_id: int, pv: int, ch: PlanChanges, not
                     )
         for no, e in ch.acts.items():
             _update(conn, "plan_acts", "act_no", new_pv, no, e.model_dump(exclude_none=True))
+            # An act's single arc is a copy of the act: keep the two the same.
+            conn.execute(
+                """UPDATE plan_arcs SET title = a.title, goal = a.goal, turning_point = a.turning_point
+                   FROM plan_acts a WHERE plan_arcs.plan_version_id = ? AND a.plan_version_id = ? AND a.act_no = ?
+                   AND plan_arcs.act_no = a.act_no AND plan_arcs.start_ep = a.start_ep AND plan_arcs.end_ep = a.end_ep""",
+                (new_pv, new_pv, no),
+            )
         for no, e in ch.arcs.items():
             _update(conn, "plan_arcs", "arc_no", new_pv, no, e.model_dump(exclude_none=True))
         for ep, e in ch.beats.items():

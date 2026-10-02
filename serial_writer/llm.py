@@ -56,6 +56,11 @@ class CallContext:
     story_id: int | None = None
     ep_no: int | None = None
     run_id: int | None = None
+    # The episode budget counts tokens since this time (the start of the current
+    # writing attempt), so a human asking for a rewrite starts a fresh budget.
+    budget_since: str | None = None
+    # Off for steps that must finish once the writing is done (saving memory).
+    budgeted: bool = True
 
 
 class LLMClient:
@@ -200,10 +205,10 @@ class LLMClient:
         raise LLMError(f"{ctx.node}: no usable answer after {attempts} attempts ({last_error})")
 
     def _check_budget(self, ctx: CallContext) -> None:
-        if ctx.story_id is None or ctx.ep_no is None:
+        if ctx.story_id is None or ctx.ep_no is None or not ctx.budgeted:
             return
         with self._db_lock:
-            used = episode_tokens_used(self.conn, ctx.story_id, ctx.ep_no)
+            used = episode_tokens_used(self.conn, ctx.story_id, ctx.ep_no, ctx.budget_since)
         budget = self.settings.episode_token_budget
         if used >= budget:
             with self._db_lock:

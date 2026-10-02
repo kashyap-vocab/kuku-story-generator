@@ -16,8 +16,8 @@ from typing import Any
 from . import plan_prompts as P
 from .db import to_json, transaction
 from .llm import CallContext, LLMClient, LLMError
-from .plan_models import Bible, acts_model, arcs_model, beats_model, repetition_model, thread_key
-from .plan_shape import Span, act_spans, all_arc_spans
+from .plan_models import acts_model, arcs_model, beats_model, bible_model, repetition_model, thread_key
+from .plan_shape import Span, act_spans, all_arc_spans, story_size
 from .plan_store import (
     available, latest_bible_id, latest_draft_plan_id, load_acts, load_arcs, load_beats,
     load_bible, load_cast, load_threads, new_plan_version, save_bible, seed_from_bible,
@@ -71,7 +71,8 @@ class Planner:
 
     def _make_bible(self, story: sqlite3.Row, note: str | None, run_id: int | None, reason: str) -> int:
         bible = self.llm.structured(
-            P.bible_prompt(story["premise"], story["total_episodes"], note), Bible,
+            P.bible_prompt(story["premise"], story["total_episodes"], note, story_size(story["total_episodes"])),
+            bible_model(story_size(story["total_episodes"])),
             self._ctx("bible", story["id"], run_id), temperature=0.7, max_tokens=5000,
         )
         data = _clean_bible(bible.model_dump(), story["total_episodes"])
@@ -107,7 +108,7 @@ class Planner:
                 self.conn.execute(
                     """INSERT INTO plan_acts (plan_version_id, act_no, title, goal, turning_point, start_ep, end_ep, details)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (pv, span.no, act.title, act.goal, act.turning_point, span.start, span.end, to_json(details)),
+                    (pv, span.no, plain_title(act.title), act.goal, act.turning_point, span.start, span.end, to_json(details)),
                 )
         log_step(self.conn, "plan_acts", "created", run_id=run_id, story_id=story_id,
                  detail={"plan_version_id": pv, "acts": len(spans)})
@@ -123,6 +124,20 @@ class Planner:
             if any(a["act_no"] == act["act_no"] for a in arcs):
                 continue
             spans = spans_by_act[act["act_no"]]
+            if len(spans) == 1:
+                # An act too short to split: its one arc is the act itself. No model call,
+                # and nothing for the two to disagree about.
+                with transaction(self.conn):
+                    self.conn.execute(
+                        """INSERT INTO plan_arcs (plan_version_id, arc_no, act_no, title, goal, turning_point,
+                               start_ep, end_ep, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (pv, spans[0].no, act["act_no"], act["title"], act["goal"], act["turning_point"],
+                         act["start_ep"], act["end_ep"],
+                         to_json({"focus_characters": [], "new_threads": [], "new_characters": [], "same_as_act": True})),
+                    )
+                log_step(self.conn, "plan_arcs", "copied_from_act", run_id=run_id, story_id=story_id,
+                         detail={"plan_version_id": pv, "act": act["act_no"]})
+                continue
             names = self._names_available(pv, bible, spans[0].no - 1, act["end_ep"])
             out = self.llm.structured(
                 P.arcs_prompt(
@@ -133,7 +148,8 @@ class Planner:
                     [c["name"] for c in load_cast(self.conn, pv) if c["source"] != "bible"],
                     note,
                 ),
-                arcs_model(len(spans), names), self._ctx("plan_arcs", story_id, run_id),
+                arcs_model(len(spans), names, story_size(get_story(self.conn, story_id)["total_episodes"]).arc_extras),
+                self._ctx("plan_arcs", story_id, run_id),
                 temperature=0.7, max_tokens=5000,
             )
             with transaction(self.conn):
@@ -143,7 +159,7 @@ class Planner:
                     self.conn.execute(
                         """INSERT INTO plan_arcs (plan_version_id, arc_no, act_no, title, goal, turning_point,
                                start_ep, end_ep, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (pv, span.no, act["act_no"], arc.title, arc.goal, arc.turning_point,
+                        (pv, span.no, act["act_no"], plain_title(arc.title), arc.goal, arc.turning_point,
                          span.start, span.end, to_json(details)),
                     )
             log_step(self.conn, "plan_arcs", "created", run_id=run_id, story_id=story_id,
@@ -232,6 +248,7 @@ class Planner:
         model = beats_model(len(eps), names, usable_keys)
         ctx = self._ctx("plan_beats", story_id, run_id)
         out = self.llm.structured(prompt, model, ctx, temperature=0.7, max_tokens=6000)
+        self._tidy_thread_labels(story_id, arc["arc_no"], out.beats, state_before, run_id)
 
         hard = self._beat_problems(out.beats, eps, state_before, must_close, earlier)
         copied = {int(p.split()[1]) for p in hard if "nearly a copy" in p}
@@ -243,12 +260,25 @@ class Planner:
                 P.repair_messages(prompt, out.model_dump_json(), problems), model,
                 self._ctx("plan_beats_repair", story_id, run_id), temperature=0.5, max_tokens=6000,
             )
+            self._tidy_thread_labels(story_id, arc["arc_no"], repaired.beats, state_before, run_id)
             left = self._beat_problems(repaired.beats, eps, state_before, must_close, earlier)
             # Keep the rewrite unless it made the code-checked problems worse.
             if len(left) <= len(hard):
                 out = repaired
             else:
                 left = hard
+            if any("nearly a copy" in p for p in left):
+                # A model asked to fix its own copy tends to copy again: it can see the
+                # copy. One fresh start, and code keeps whichever has fewer problems.
+                fresh = self.llm.structured(prompt, model, self._ctx("plan_beats_fresh", story_id, run_id),
+                                            temperature=0.9, max_tokens=6000)
+                self._tidy_thread_labels(story_id, arc["arc_no"], fresh.beats, state_before, run_id)
+                fresh_left = self._beat_problems(fresh.beats, eps, state_before, must_close, earlier)
+                log_step(self.conn, "plan_beats", "fresh_attempt", run_id=run_id, story_id=story_id,
+                         detail={"arc": arc["arc_no"], "before": len(left), "after": len(fresh_left),
+                                 "kept": "fresh" if len(fresh_left) < len(left) else "repaired"})
+                if len(fresh_left) < len(left):
+                    out, left = fresh, fresh_left
             if left:
                 log_step(self.conn, "plan_beats", "unfixed_after_repair", run_id=run_id,
                          story_id=story_id, detail={"arc": arc["arc_no"], "problems": left})
@@ -264,6 +294,34 @@ class Planner:
         log_step(self.conn, "plan_beats", "created", run_id=run_id, story_id=story_id,
                  detail={"plan_version_id": pv, "arc": arc["arc_no"], "episodes": len(eps),
                          "repaired": bool(problems)})
+
+    def _tidy_thread_labels(
+        self, story_id: int, arc_no: int, beats: list[Any], state_before: dict[str, str], run_id: int | None
+    ) -> None:
+        """Fix thread labels code can fix for certain, in place. The model often marks a
+        question 'resolve' and then keeps advancing it: if it keeps coming up, it wasn't
+        answered yet, so the last mention becomes the resolve. And a thread touched
+        before it was opened is opened there. Story text is never changed."""
+        fixed = []
+        for key, before in state_before.items():
+            if before == "resolved":
+                continue  # the model can't pick these (code removed them from its choices)
+            moves = [m for b in beats for m in b.threads if m.key == key]
+            if not moves:
+                continue
+            if before == "not_opened" and moves[0].event != "open":
+                fixed.append(f"[{key}] first mention '{moves[0].event}' -> 'open'")
+                moves[0].event = "open"
+            resolves = [i for i, m in enumerate(moves) if m.event == "resolve"]
+            if resolves and resolves[0] < len(moves) - 1:
+                for m in moves[resolves[0]:-1]:
+                    if m.event == "resolve":
+                        m.event = "advance"
+                moves[-1].event = "resolve"
+                fixed.append(f"[{key}] resolved early, then used again: resolve moved to its last mention")
+        if fixed:
+            log_step(self.conn, "plan_beats", "tidied_thread_labels", run_id=run_id, story_id=story_id,
+                     detail={"arc": arc_no, "fixed": fixed})
 
     def _names_available(self, pv: int, bible: dict[str, Any], arc_no: int, by_ep: int) -> list[str]:
         """People in the story by episode `by_ep`: bible cast by their arrival
@@ -347,6 +405,11 @@ class Planner:
     @staticmethod
     def _ctx(node: str, story_id: int, run_id: int | None) -> CallContext:
         return CallContext(node=node, story_id=story_id, run_id=run_id)
+
+
+def plain_title(title: str) -> str:
+    """'Act 1: The Glitch' -> 'The Glitch'. The page adds the label itself."""
+    return re.sub(r"^\s*(act|arc|episode|ep)\s*\d+\s*[:.\-–—]\s*", "", title, flags=re.I).strip() or title
 
 
 def _plain(text: str) -> str:

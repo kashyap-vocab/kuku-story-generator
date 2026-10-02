@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Memory · {{ story.title or 'Story' }}{% endblock %}
+{% block crumbs %}<a class="crumb" href="/stories/{{ story.id }}">{{ story.title or 'Story ' ~ story.id }}</a><span class="crumb">Memory</span>{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Story memory</h1>
+  <p class="muted">What the story knows after episode {{ upto }}. Only approved episodes count; each episode
+    is written from a slice of this, picked by code.</p>
+</section>
+
+{% if summaries %}
+<section class="card" id="summaries">
+  <h2>Arc summaries</h2>
+  <p class="muted">What later episodes are given instead of the full text. The model writes what happened;
+    everything else here is filled from the tables by code.</p>
+  {% for s in summaries %}
+  <div style="border-bottom: 1px solid var(--line); padding: 10px 0">
+    <h3>Episodes {{ s.start_ep }}–{{ s.end_ep }}</h3>
+    <p>{{ s.narrative }}</p>
+    {% set snap = s.snapshot %}
+    {% if snap.open_threads %}<p class="muted"><strong>Open:</strong>
+      {% for t in snap.open_threads %}{{ t.title }} (since ep {{ t.opened_ep }}, quiet {{ t.quiet_for }}){{ '; ' if not loop.last }}{% endfor %}</p>{% endif %}
+    {% if snap.resolved_here %}<p class="muted"><strong>Resolved:</strong> {{ snap.resolved_here | join('; ') }}</p>{% endif %}
+    {% if snap.human_review_points %}<p class="muted"><strong>Your notes:</strong>
+      {% for f in snap.human_review_points %}ep {{ f.ep }} {{ f.action }}: {{ f.text }}{{ '; ' if not loop.last }}{% endfor %}</p>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="card" id="instructions">
+  <h2>Instructions from you</h2>
+  {% for d in directives %}
+  <div style="border-bottom: 1px solid var(--line); padding: 10px 0">
+    <p><span class="pill {{ 'good' if d.status == 'active' else '' }}">{{ d.status }}</span> {{ d.text }}
+      <span class="muted">({{ d.kind }}, from ep {{ d.from_ep }})</span></p>
+    <p class="muted">History: {% for h in directive_history[d.id] %}{{ h.status }}{% if h.reason %} ({{ h.reason }}){% endif %}{{ ' → ' if not loop.last }}{% endfor %}</p>
+    <form method="post" action="/stories/{{ story.id }}/directives/{{ d.id }}" class="row">
+      {% if d.status == 'active' %}
+        <button name="status" value="paused" class="ghost">Pause</button>
+        <button name="status" value="fulfilled" class="ghost">Mark done</button>
+      {% else %}
+        <button name="status" value="active" class="ghost">Make active again</button>
+      {% endif %}
+    </form>
+  </div>
+  {% else %}
+  <p class="muted">None yet. Give feedback on an episode and confirm it as a lasting instruction.</p>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>People</h2>
+  <table class="simple">
+    <tr><th>Who</th><th>Status</th><th>Where</th><th>Knows</th><th>Last change</th></tr>
+    {% for name, s in states.items() %}
+    <tr><td><strong>{{ name }}</strong><br><span class="muted">{{ s.importance }}</span></td>
+      <td><span class="{% if s.status == 'dead' %}dead{% endif %}">{{ s.status }}</span></td>
+      <td>{{ s.location or '?' }}</td>
+      <td>{% for k in s.knows[-4:] %}{{ k }}{{ '; ' if not loop.last }}{% endfor %}</td>
+      <td><a href="/stories/{{ story.id }}/episodes/{{ s.ep_no }}">ep {{ s.ep_no }}</a></td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No episodes approved yet.</td></tr>{% endfor %}
+  </table>
+  {% if rels %}
+  <h3>Relationships</h3>
+  <ul>{% for r in rels %}<li>{{ r.a_name }} & {{ r.b_name }}: {{ r.state }} <span class="muted">(ep {{ r.ep_no }})</span></li>{% endfor %}</ul>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Threads</h2>
+  <table class="simple">
+    <tr><th>Question</th><th>State</th><th>Quiet for</th><th>History</th></tr>
+    {% for t in threads %}
+    <tr><td><strong>{{ t.title }}</strong><br><span class="muted">{{ t.description }}</span></td>
+      <td>{{ t.state }}</td>
+      <td>{% if t.state == 'open' %}{{ upto - t.last_ep }} eps{% endif %}</td>
+      <td>{% for e in t.events %}<span class="muted">ep {{ e.ep_no }}</span> {{ e.kind }}{% if e.note %}: {{ e.note }}{% endif %}<br>{% endfor %}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">No threads raised yet.</td></tr>{% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Facts</h2>
+  <ul>{% for f in facts %}<li><span class="muted">ep {{ f.ep_no }}{% if f.story_time %}, {{ f.story_time }}{% endif %} · {{ f.category }}</span> {{ f.text }}</li>
+  {% else %}<li class="muted">None yet.</li>{% endfor %}</ul>
+  {% if key_lines %}
+  <h3>Key lines</h3>
+  <ul>{% for k in key_lines %}<li><q>{{ k.line }}</q> <span class="muted">{{ k.speaker or 'narration' }}, ep {{ k.ep_no }} · {{ k.why }}</span></li>{% endfor %}</ul>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Everything you've said</h2>
+  <table class="simple">
+    {% for f in feedback %}
+    <tr><td class="muted">{{ f.created_at[:16] | replace('T', ' ') }}</td><td>{% if f.ep_no %}ep {{ f.ep_no }}{% else %}plan{% endif %}</td>
+      <td>{{ f.action | replace('_', ' ') }}</td><td>{{ f.text or '' }}</td></tr>
+    {% else %}<tr><td class="muted">Nothing yet.</td></tr>{% endfor %}
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Serial writer{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+</head>
+<body>
+  <header class="top">
+    <a href="/" class="brand">Serial writer</a>
+    {% block crumbs %}{% endblock %}
+  </header>
+  <main class="{% block main_class %}{% endblock %}">
+    {% if request.query_params.get('error') %}
+      <div class="flash error">{{ request.query_params.get('error') }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  {% block actionbar %}{% endblock %}
+</body>
+</html>

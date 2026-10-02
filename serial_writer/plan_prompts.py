@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .plan_shape import Span
+from .plan_shape import Span, StorySize
 
 HEAD_WRITER = """You are the head writer of a long-running serial story told in plain, everyday spoken English.
 Your job is planning, not prose. A good plan for a long serial:
@@ -108,15 +108,15 @@ def render_thread_status(status: list[dict[str, Any]], at_ep: int) -> str:
 # ---------------------------------------------------------------- prompts
 
 
-def bible_prompt(premise: str, total_episodes: int, note: str | None) -> list[dict[str, str]]:
+def bible_prompt(premise: str, total_episodes: int, note: str | None, size: StorySize) -> list[dict[str, str]]:
     return _messages(f"""Create the story rules for a {total_episodes}-episode serial. Each episode is 400-700 words.
 {_note(note)}
 PREMISE: {premise}
 
 What to write:
 - hidden_truth: what is REALLY going on, fully explained: who, what, when, why and how. Specific enough that any clue can be checked against it. The listener only learns it slowly.
-- cast: 6-12 people with clearly different voices. In "description", say how each one talks. Include people who arrive later, with the episode they arrive around (1-{total_episodes}). At least 3 major characters.
-- threads: the 4-10 big open questions that carry the story. Keys are short snake_case ids.
+- cast: {size.cast[0]}-{size.cast[1]} people with clearly different voices, at least {size.major_min} of them major (the main character is always major). That is the right number for {total_episodes} episodes: every person must matter to the ending, so don't add anyone the story can't use. In "description", say how each one talks. Give the episode each one arrives around (1-{total_episodes}).
+- threads: the {size.threads[0]}-{size.threads[1]} big open questions that carry the story, each one answered by the end. Keys are short snake_case ids.
 - style_guide: 5-10 concrete rules for how the prose should sound: point of view, tense, sentence length, how much dialogue. It must read like a person talking: everyday words, short sentences, no flowery description.
 - world_rules: 3-10 things that must always stay true (how the strange part of the story works, its limits, its costs).
 
@@ -198,11 +198,16 @@ def beats_prompt(
     note: str | None,
 ) -> list[dict[str, str]]:
     prev = (
-        f"PREVIOUS ARC {prev_arc['arc_no']} (shown only so you continue from where it ends; NEVER copy or reuse its lines): "
-        f"{prev_arc['title']}: {prev_arc['goal']}\n{render_beats(prev_beats)}"
+        # Only its last few lines: enough to continue from, too little to copy.
+        f"PREVIOUS ARC {prev_arc['arc_no']}: {prev_arc['title']}: {prev_arc['goal']}\n"
+        f"It ends like this (continue from here; NEVER copy or reuse these lines):\n{render_beats(prev_beats[-3:])}"
         if prev_arc else "(this is the first arc)"
     )
-    nxt = f"NEXT ARC (lead into it): {next_arc['title']}: {next_arc['goal']}" if next_arc else "(this is the last arc of the story)"
+    nxt = (
+        f"NEXT ARC (its events belong to it: set them up, but do NOT reach them in this arc): "
+        f"{next_arc['title']}: {next_arc['goal']} It ends with: {next_arc['turning_point']}"
+        if next_arc else "(this is the last arc of the story)"
+    )
     subplots = (
         "SUBPLOTS ADDED BY ARCS:\n" + "\n".join(f"- [{t['key']}] {t['title']}: {t['question']}" for t in extra_threads)
         if extra_threads else ""

@@ -9,7 +9,19 @@ from pathlib import Path
 from typing import Any, Iterator
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Changes to tables that already exist in older databases. New tables need no
+# entry: the schema script creates whatever is missing.
+MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        "ALTER TABLE episode_versions ADD COLUMN context_id INTEGER REFERENCES episode_contexts(id)",
+        "ALTER TABLE episode_versions ADD COLUMN summary TEXT",
+        "ALTER TABLE episode_versions ADD COLUMN story_time TEXT",
+        "ALTER TABLE episode_versions ADD COLUMN outline TEXT",
+        "ALTER TABLE threads ADD COLUMN key TEXT",
+    ],
+}
 
 
 def connect(path: Path | str) -> sqlite3.Connection:
@@ -34,6 +46,11 @@ def init_db(conn: sqlite3.Connection) -> None:
         raise RuntimeError(
             f"Database schema v{current} is newer than this code (v{SCHEMA_VERSION})."
         )
+    existing = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'stories'").fetchone() is not None
+    if existing:
+        for version in range(current + 1, SCHEMA_VERSION + 1):
+            for stmt in MIGRATIONS.get(version, []):
+                conn.execute(stmt)
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 

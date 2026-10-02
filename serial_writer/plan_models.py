@@ -64,6 +64,15 @@ class Bible(BaseModel):
 # ---------------------------------------------------------------- plan levels
 
 
+def bible_model(size: Any) -> type[BaseModel]:
+    """The story rules, with as many people and questions as the story's length can carry."""
+    return create_model(
+        "Bible", __base__=Bible,
+        cast=(list[CastMember], Field(min_length=size.cast[0], max_length=size.cast[1])),
+        threads=(list[StoryThread], Field(min_length=size.threads[0], max_length=size.threads[1])),
+    )
+
+
 def acts_model(n_acts: int, names: list[str], keys: list[str]) -> type[BaseModel]:
     Name, Key = one_of(names), one_of(keys)
     Endpoint = create_model("Endpoint", name=(Name, ...), where_they_end=(str, ...))
@@ -95,7 +104,7 @@ class NewCharacter(BaseModel):
     importance: Literal["supporting", "minor"]
 
 
-def arcs_model(n_arcs: int, names: list[str]) -> type[BaseModel]:
+def arcs_model(n_arcs: int, names: list[str], max_new: int = 2) -> type[BaseModel]:
     Name = one_of(names)
     Arc = create_model(
         "Arc",
@@ -103,8 +112,8 @@ def arcs_model(n_arcs: int, names: list[str]) -> type[BaseModel]:
         goal=(str, Field(description="What this run of episodes is about and what changes")),
         turning_point=(str, Field(description="The event in the arc's last episode")),
         focus_characters=(list[Name], Field(min_length=1, max_length=5)),
-        new_threads=(list[NewThread], Field(default_factory=list, max_length=2)),
-        new_characters=(list[NewCharacter], Field(default_factory=list, max_length=2)),
+        new_threads=(list[NewThread], Field(default_factory=list, max_length=max_new)),
+        new_characters=(list[NewCharacter], Field(default_factory=list, max_length=max_new)),
     )
     return create_model("ArcsOut", arcs=(list[Arc], Field(min_length=n_arcs, max_length=n_arcs)))
 
@@ -117,8 +126,9 @@ def beats_model(n_beats: int, names: list[str], keys: list[str]) -> type[BaseMod
     Move = create_model("ThreadMove", key=(Key, ...), event=(Literal["open", "advance", "resolve"], ...))
     Beat = create_model(
         "Beat",
-        beat=(str, Field(description="What must happen in this episode, 2-3 plain sentences")),
-        hook=(str, Field(description="The cliffhanger the episode ends on")),
+        # Lengths stop a lazy answer ("Ep 12") from passing as a plan line.
+        beat=(str, Field(min_length=40, description="What must happen in this episode, 2-3 plain sentences")),
+        hook=(str, Field(min_length=15, description="The cliffhanger the episode ends on")),
         characters=(list[Name], Field(min_length=1, max_length=6)),
         threads=(list[Move], Field(default_factory=list, max_length=max_moves)),
     )

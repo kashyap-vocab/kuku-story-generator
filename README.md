@@ -6,8 +6,8 @@ SQLite, and any OpenAI-compatible model server (we use Gemma 4 12B on vLLM).
 
 How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-**Status:** planning stage done (story rules, 200-episode plan, plan check, plan
-approval and redo, resume). Episode writing and the web app come next.
+**Status:** planning, episode writing, review and feedback all work in the web app.
+Still to come: DECISIONS.md, the cost estimate, and a hosted demo.
 
 ## Setup (about 5 minutes)
 
@@ -29,30 +29,44 @@ LLM_BASE_URL=http://localhost:9010/v1
 LLM_MODEL=surya2
 ```
 
-## Running a story
+## Running it
 
 ```bash
-# Start a story and plan all 200 episodes (about 15-20 minutes)
-python -m serial_writer.cli new "A delivery rider realizes every address on today's route belongs to someone who died in the same building."
-
-# See the plan and the problems the checks found
-python -m serial_writer.cli plan 1
-python -m serial_writer.cli plan 1 --eps 1-20
-
-# Approve it, or rebuild part of it with a note
-python -m serial_writer.cli approve 1 --note "looks good"
-python -m serial_writer.cli redo 1 --target arc --no 7 --note "make it scarier, no chases"
-
-# If it stopped (crash, network, laptop asleep), pick up where it left off
-python -m serial_writer.cli continue 1
-
-# Where it is, and what it cost
-python -m serial_writer.cli status 1
-python -m serial_writer.cli usage 1
+python -m serial_writer.web --host 0.0.0.0 --port 8000
 ```
 
-Long runs keep going after you disconnect if you start them in `tmux` or with
-`nohup ... > plan.log 2>&1 &` on the server.
+Open http://localhost:8000, enter a premise, the number of episodes, and how often
+you want to stop and review. The number of characters, story threads and acts is
+set from the length: a 15-episode story gets 3 acts and 3-5 characters, a
+200-episode one 5 acts and 10-12. Planning takes about 1.5 minutes for 15 episodes
+and 13 minutes for 200; the story page shows progress and moves on by itself.
+
+**The plan.** Read it by episode, by story and characters, or by the problems the
+checks found. Click **Edit** on anything, or **Redo** an act or arc with a note.
+Your changes are saved together and the plan is checked again. When you're happy,
+**Approve the plan** and say how many episodes to write.
+
+**Each episode** opens when it's ready. At the bottom:
+
+- **Approve and continue** writes the next one.
+- **Request changes**: say what should change and where it applies: just this
+  episode, this and every episode after it (kept as a standing instruction that
+  every later episode is written with and checked against), or a change to the
+  story itself (the rest of the arc is re-planned). Or let the model decide, and
+  confirm its choice.
+- **Edit the text myself**: your version becomes the episode, and what the story
+  remembers is taken from it.
+
+Below the episode: what the checks found, what the story will remember if you
+approve, the plan line, every version, and exactly what the model was given.
+
+**Stop and come back.** Writing stops at the episode you asked for, or after the
+current one if you press **Pause**. **Continue writing** picks up from there. If the
+server stops mid-episode, the story page shows **Continue**, which resumes from the
+last finished step. The review setting can be changed any time.
+
+Run it in `tmux` or with `nohup ... &` so it keeps going after you disconnect.
+One process only: stories run in background threads inside it.
 
 ## Tests
 

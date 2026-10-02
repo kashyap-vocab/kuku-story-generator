@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Episode {{ ep }} · {{ story.title or 'Story' }}{% endblock %}
+{% block crumbs %}<a class="crumb" href="/stories/{{ story.id }}">{{ story.title or 'Story ' ~ story.id }}</a><span class="crumb">Episode {{ ep }}</span>{% endblock %}
+{% block main_class %}reading{% endblock %}
+
+{% set here = "/stories/" ~ story.id ~ "/episodes/" ~ ep %}
+{% set must = problems | selectattr('severity', 'equalto', 'must_fix') | list %}
+
+{% block content %}
+<nav class="pager">
+  {% if ep > 1 %}<a href="/stories/{{ story.id }}/episodes/{{ ep - 1 }}">← Episode {{ ep - 1 }}</a>{% else %}<span></span>{% endif %}
+  {% if last_ep and ep < last_ep %}<a href="/stories/{{ story.id }}/episodes/{{ ep + 1 }}">Episode {{ ep + 1 }} →</a>{% endif %}
+</nav>
+
+{# ---- the model sorted the reviewer's note: confirm how it is used #}
+{% if confirming %}
+{% set f = confirming.feedback %}
+<section class="card" id="confirm" style="border-left: 4px solid var(--accent)">
+  <h2>How should your note be used?</h2>
+  <p>You wrote: <q>{{ f.text }}</q></p>
+  {% if confirming.error %}<div class="flash error">{{ confirming.error }}</div>{% endif %}
+  <form method="post" action="{{ here }}/feedback" class="stack">
+    <fieldset class="choices">
+      {% for kind, label, help in [
+        ('fix_episode', 'Just this episode', 'Rewrite this episode with your note. Later episodes are not affected.'),
+        ('lasting_instruction', 'This and every episode after it', 'Kept as a standing instruction: every new episode is written with it and checked against it.'),
+        ('story_change', 'Change the story from here', 'Re-plan the rest of this arc around it, then rewrite this episode to make it happen.')] %}
+      <label class="choice"><input type="radio" name="kind" value="{{ kind }}" {% if f.kind == kind %}checked{% endif %}>
+        <span><strong>{{ label }}</strong>{% if f.kind == kind %} <span class="pill blue">suggested</span>{% endif %}<small>{{ help }}</small></span></label>
+      {% endfor %}
+    </fieldset>
+    <label>Your note, as the writers will read it
+      <textarea name="instruction" rows="2">{{ f.instruction }}</textarea></label>
+    <input type="hidden" name="instruction_kind" value="{{ f.instruction_kind }}">
+    <input type="hidden" name="rewrite" value="yes">
+    <div class="row"><button>Apply</button></div>
+  </form>
+  <form method="post" action="{{ here }}/feedback"><input type="hidden" name="kind" value="cancel">
+    <button class="link">Cancel</button></form>
+</section>
+{% endif %}
+
+{% if status.state == 'running' %}
+<div class="flash"><span class="spinner"></span>The model is working on this story. <a href="/stories/{{ story.id }}">See progress</a></div>
+{% endif %}
+{% if reviewing and status.waiting_for.error %}
+<div class="flash error">That couldn't be applied: {{ status.waiting_for.error }}</div>
+{% endif %}
+
+<span class="eyebrow">Episode {{ ep }} of {{ story.total_episodes }}</span>
+<h1>{{ title | plain_title }}</h1>
+<div class="checks-line small">
+  {% if v.status == 'approved' %}<span class="pill good">approved</span>
+  {% elif v.status == 'in_review' %}<span class="pill warn">waiting for you</span>
+  {% else %}<span class="pill">{{ v.status | replace('_', ' ') }}</span>{% endif %}
+  {% if v.created_by == 'human' %}<span class="pill edited">edited by you</span>{% endif %}
+  {% if must %}<a href="#details" class="pill bad">{{ must | length }} problem{{ 's' if must | length > 1 }} the checks couldn't fix</a>
+  {% elif problems %}<a href="#details" class="pill warn">{{ problems | length }} note{{ 's' if problems | length > 1 }} from the checks</a>
+  {% elif v.check_report %}<span class="pill good">✓ checks passed</span>{% endif %}
+  <span class="muted">{{ v.word_count }} words{% if v.story_time %} · ends {{ v.story_time }}{% endif %}{% if versions | length > 1 %} · version {{ v.version }} of {{ versions | length }}{% endif %}</span>
+</div>
+
+{% if editing %}
+<form method="post" action="{{ here }}/decide" class="stack" id="edit-form">
+  <input type="hidden" name="action" value="edit">
+  <textarea name="text" rows="28" style="font-size: 1.02rem; line-height: 1.7">{{ v.text }}</textarea>
+  <input name="note" placeholder="What you changed and why (optional)">
+</form>
+{% else %}
+<article class="episode-text">
+  {% for para in body.split('\n') if para.strip() %}<p>{{ para }}</p>{% endfor %}
+</article>
+{% endif %}
+
+<section id="details" style="margin-top: 24px">
+  {% if problems %}
+  <details class="section" {% if must %}open{% endif %}><summary>What the checks found</summary>
+    <ul class="list">
+      {% for p in problems %}
+      <li><span class="pill {{ p.severity }}">{{ 'must fix' if p.severity == 'must_fix' else 'note' }}</span> {{ p.message }}
+        {% if p.quote %}<br><q class="quote">{{ p.quote }}</q>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% if dropped %}<p class="muted small">{{ dropped | length }} complaint{{ 's' if dropped | length > 1 }} dropped: the quote wasn't really in the episode or the memory.</p>{% endif %}
+  </details>
+  {% endif %}
+
+  <details class="section memory"><summary>{% if v.status == 'approved' %}What the story remembered from this episode{% else %}What the story will remember if you approve{% endif %}</summary>
+    {% set m = memory %}
+    {% if v.one_line %}<p><strong>{{ v.one_line }}</strong></p>{% endif %}
+    {% if m.states %}<h3>People</h3><ul>{% for s in m.states %}
+      <li><strong>{{ s.name }}</strong>: <span class="{{ 'dead' if s.status == 'dead' }}">{{ s.status }}</span>, at {{ s.location or '?' }}{% if s.notes and s.notes | lower not in ('nothing', 'none') %} · {{ s.notes }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+    {% if m.new_characters %}<h3>New people</h3><ul>{% for c in m.new_characters %}<li><strong>{{ c.name }}</strong>: {{ c.role }}</li>{% endfor %}</ul>{% endif %}
+    {% if m.relationships %}<h3>Between people</h3><ul>{% for r in m.relationships %}<li>{{ r.a_name }} &amp; {{ r.b_name }}: {{ r.state }}</li>{% endfor %}</ul>{% endif %}
+    {% if m.thread_events %}<h3>Story threads</h3><ul>{% for t in m.thread_events %}<li><span class="tag">{{ t.kind }}</span> {{ t.title }}: {{ t.note or '' }}</li>{% endfor %}</ul>{% endif %}
+    {% if m.facts %}<h3>Facts</h3><ul>{% for f in m.facts %}<li>{{ f.text }}</li>{% endfor %}</ul>{% endif %}
+    {% if m.key_lines %}<h3>Lines to remember</h3><ul>{% for k in m.key_lines %}<li><q>{{ k.line }}</q> <span class="muted small">{{ k.speaker or 'narration' }}</span></li>{% endfor %}</ul>{% endif %}
+    {% if not (m.states or m.facts or m.thread_events or m.key_lines) %}<p class="muted">Nothing yet.</p>{% endif %}
+  </details>
+
+  {% if beat %}
+  <details class="section"><summary>The plan for this episode</summary>
+    <p>{{ beat.beat }}</p>
+    <p class="hook small">→ {{ beat.hook }}</p>
+  </details>
+  {% endif %}
+
+  <details class="section"><summary>Versions and your notes</summary>
+    <table class="simple small">
+      {% for x in versions %}
+      <tr {% if x.id == v.id %}class="current"{% endif %}>
+        <td><a href="?v={{ x.id }}">version {{ x.version }}</a></td><td>{{ x.status | replace('_', ' ') }}</td>
+        <td>{{ 'you' if x.created_by == 'human' else 'model' }}</td><td class="muted">{{ x.word_count }} words</td></tr>
+      {% endfor %}
+    </table>
+    {% if feedback %}<ul class="small" style="margin-top: 10px">{% for f in feedback %}<li><span class="muted">{{ f.action | replace('note', 'note') }}:</span> {{ f.text or '' }}</li>{% endfor %}</ul>{% endif %}
+    <p class="muted small">{{ cost.calls }} model calls · {{ "{:,}".format(cost.tokens_in + cost.tokens_out) }} tokens · {{ cost.seconds }} s</p>
+  </details>
+
+  {% if pack %}
+  <details class="section"><summary>What the model knew when writing it <span class="muted small">(~{{ (pack | length / 4) | int }} tokens)</span></summary>
+    <pre class="pack">{{ pack }}</pre>
+  </details>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block actionbar %}
+{% if reviewing %}
+<div class="actionbar"><div class="inner">
+  {% if editing %}
+    <a class="btn ghost" href="{{ here }}">Cancel</a>
+    <span class="spacer"></span>
+    <button form="edit-form" class="big">Save my version and approve</button>
+  {% else %}
+    <details class="pop">
+      <summary class="btn ghost">Request changes</summary>
+      <div class="panel">
+        <form method="post" action="{{ here }}/decide" class="stack">
+          <input type="hidden" name="action" value="feedback">
+          <label>What should change?
+            <textarea name="feedback" rows="3" required placeholder="e.g. the dialogue in the café is stiff · slow down the romance · kill off Marcus"></textarea></label>
+          <fieldset class="choices">
+            {% for kind, label, help in [
+              ('auto', 'Decide for me', 'The model works out where it applies; you confirm.'),
+              ('fix_episode', 'Just this episode', 'Rewrite it with your note.'),
+              ('lasting_instruction', 'This and every episode after it', 'Rewrite it, and keep the note for all future episodes.'),
+              ('story_change', 'Change the story from here', 'Re-plan the rest of this arc, then rewrite this episode.')] %}
+            <label class="choice"><input type="radio" name="kind" value="{{ kind }}" {% if loop.first %}checked{% endif %}>
+              <span><strong>{{ label }}</strong><small>{{ help }}</small></span></label>
+            {% endfor %}
+          </fieldset>
+          <div><button>Send</button></div>
+        </form>
+      </div>
+    </details>
+    <a class="btn ghost" href="?edit=1">Edit the text myself</a>
+    <span class="spacer"></span>
+    <form method="post" action="{{ here }}/decide">
+      <input type="hidden" name="action" value="approve">
+      <button class="big">Approve{% if ep < story.total_episodes %} and continue{% endif %}</button>
+    </form>
+  {% endif %}
+</div></div>
+{% endif %}
+{% endblock %}

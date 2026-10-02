@@ -180,9 +180,29 @@ CREATE TABLE IF NOT EXISTS episode_versions (
                      CHECK (status IN ('draft', 'in_review', 'approved', 'rejected', 'superseded')),
     check_report     TEXT CHECK (check_report IS NULL OR json_valid(check_report)),
     revisions        INTEGER NOT NULL DEFAULT 0,
+    -- What the model was given when it wrote this version (see episode_contexts).
+    context_id       INTEGER REFERENCES episode_contexts(id),
+    -- ~100 words on what happened, and the story day and time it ends at. From memory extraction.
+    summary          TEXT,
+    story_time       TEXT,
+    -- The scene outline the draft was written from.
+    outline          TEXT CHECK (outline IS NULL OR json_valid(outline)),
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     decided_at       TEXT,
     UNIQUE (story_id, ep_no, version)
+);
+
+-- The memory pack an episode was written from, and the ids of every memory row
+-- in it. Answers "what did the model know when it wrote episode 150?", and says
+-- which later episodes depend on a fact when an earlier episode changes.
+CREATE TABLE IF NOT EXISTS episode_contexts (
+    id               INTEGER PRIMARY KEY,
+    story_id         INTEGER NOT NULL REFERENCES stories(id),
+    ep_no            INTEGER NOT NULL,
+    plan_version_id  INTEGER NOT NULL REFERENCES plan_versions(id),
+    pack             TEXT NOT NULL,
+    refs             TEXT NOT NULL CHECK (json_valid(refs)),
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 -- At most one approved version of each episode, ever.
@@ -233,6 +253,8 @@ CREATE TABLE IF NOT EXISTS facts (
 CREATE TABLE IF NOT EXISTS threads (
     id                 INTEGER PRIMARY KEY,
     story_id           INTEGER NOT NULL REFERENCES stories(id),
+    -- The plan thread it follows (plan_threads.key).
+    key                TEXT,
     title              TEXT NOT NULL,
     description        TEXT,
     opened_ep          INTEGER,

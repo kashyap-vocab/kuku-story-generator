@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}Plan · {{ bible.title }}{% endblock %}
+{% block crumbs %}<a class="crumb" href="/stories/{{ story.id }}">{{ bible.title }}</a><span class="crumb">Plan</span>{% endblock %}
+
+{% set here = "/stories/" ~ story.id ~ "/plan" %}
+{% set must = problems | selectattr('severity', 'equalto', 'must_fix') | list %}
+
+{% macro edited(flag) -%}{% if flag %} <span class="pill edited">changed</span>{% endif %}{%- endmacro %}
+
+{% macro redo(target, no, what) -%}
+<details class="edit">
+  <summary>↻ Redo</summary>
+  <form method="post" action="{{ here }}/redo" class="stack">
+    <input type="hidden" name="target" value="{{ target }}">
+    {% if no %}<input type="hidden" name="no" value="{{ no }}">{% endif %}
+    <label>What should be different? The model rebuilds {{ what }} from this.
+      <textarea name="note" rows="2" required placeholder="e.g. make it scarier, no chases"></textarea></label>
+    <div><button>Rebuild {{ what }}</button></div>
+  </form>
+</details>
+{%- endmacro %}
+
+{% block content %}
+<section style="margin-bottom: 8px">
+  <h1>{{ pending.bible.title or bible.title }}</h1>
+  <p class="muted">{{ pending.bible.logline or bible.logline }}</p>
+  <p class="small muted">{{ story.total_episodes }} episodes · plan version {{ plan.version }}
+    {% if plan.status == 'approved' %}· <span class="pill good">approved</span>{% elif reviewing %}· <span class="pill warn">waiting for your approval</span>{% endif %}</p>
+</section>
+
+{% if status.state == 'running' and not reviewing %}
+<div class="flash">The model is working on this story. <a href="/stories/{{ story.id }}">See progress</a></div>
+{% endif %}
+{% if reviewing and status.waiting_for.error %}
+<div class="flash error">Your last change couldn't be applied: {{ status.waiting_for.error }}</div>
+{% endif %}
+
+<nav class="tabs">
+  <a href="?tab=episodes" class="{{ 'on' if tab == 'episodes' }}">Episodes</a>
+  <a href="?tab=story" class="{{ 'on' if tab == 'story' }}">Story &amp; characters</a>
+  <a href="?tab=problems" class="{{ 'on' if tab == 'problems' }}">Problems
+    <span class="count {{ 'bad' if must }}">{{ problems | length }}</span></a>
+  <a href="?tab=history" class="{{ 'on' if tab == 'history' }}">History</a>
+</nav>
+
+{# ------------------------------------------------------------------ episodes #}
+{% if tab == 'episodes' %}
+{% if reviewing %}<p class="muted small">Click <strong>✎ Edit</strong> on any act, arc or episode to change it, or <strong>↻ Redo</strong> to have the model rebuild it with your note.</p>{% endif %}
+
+{% for act in acts %}
+{% set pa = pending.acts.get(act.act_no | string) %}{% set va = pa or act %}
+{% set act_arcs = arcs_by_act[act.act_no] %}
+{# A short act has one arc that is the act itself: don't show it twice. #}
+{% set single = act_arcs | length == 1 and act_arcs[0].start_ep == act.start_ep and act_arcs[0].end_ep == act.end_ep %}
+<section class="card" id="act-{{ act.act_no }}">
+  <div class="act-head">
+    <div>
+      <span class="eyebrow">Act {{ act.act_no }} · episodes {{ act.start_ep }}–{{ act.end_ep }}</span>
+      <h2>{{ va.title | plain_title }}{{ edited(pa) }}</h2>
+      <p>{{ va.goal }}</p>
+      <p class="muted small"><strong>Ends with:</strong> {{ va.turning_point }}</p>
+    </div>
+    {% if reviewing %}
+    <div class="tools">
+      <details class="edit"><summary>✎ Edit</summary>
+        <form method="post" action="{{ here }}/edit/acts/{{ act.act_no }}" class="stack">
+          <label>Title <input name="title" value="{{ va.title | plain_title }}"></label>
+          <label>What this act is about <textarea name="goal" rows="3">{{ va.goal }}</textarea></label>
+          <label>How it ends <textarea name="turning_point" rows="2">{{ va.turning_point }}</textarea></label>
+          <div><button>Keep change</button></div>
+        </form>
+      </details>
+      {% if single %}{{ redo('arc', act_arcs[0].arc_no, "this act's episodes") }}
+      {% else %}{{ redo('act', act.act_no, "this act's arcs and episodes") }}{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% for arc in arcs_by_act[act.act_no] %}
+  {% set pr = pending.arcs.get(arc.arc_no | string) %}{% set vr = pr or arc %}
+  <div class="{{ 'arc' if not single }}" id="arc-{{ arc.arc_no }}">
+    {% if not single %}
+    <div class="arc-head">
+      <div>
+        <span class="eyebrow">Arc {{ arc.arc_no }} · episodes {{ arc.start_ep }}–{{ arc.end_ep }}</span>
+        <h3>{{ vr.title | plain_title }}{{ edited(pr) }}</h3>
+        <p class="muted small">{{ vr.goal }}</p>
+      </div>
+      {% if reviewing %}
+      <div class="tools">
+        <details class="edit"><summary>✎ Edit</summary>
+          <form method="post" action="{{ here }}/edit/arcs/{{ arc.arc_no }}" class="stack">
+            <label>Title <input name="title" value="{{ vr.title | plain_title }}"></label>
+            <label>What this arc is about <textarea name="goal" rows="3">{{ vr.goal }}</textarea></label>
+            <label>How it ends <textarea name="turning_point" rows="2">{{ vr.turning_point }}</textarea></label>
+            <div><button>Keep change</button></div>
+          </form>
+        </details>
+        {{ redo('arc', arc.arc_no, "this arc's episodes") }}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <ul class="list">
+      {% for b in beats_by_arc[arc.arc_no] %}
+      {% set pb = pending.beats.get(b.ep_no | string) %}{% set vb = pb or b %}
+      {% set probs = problems_by_ep.get(b.ep_no, []) %}
+      {% set has_must = probs | selectattr('severity', 'equalto', 'must_fix') | list %}
+      <li id="ep-{{ b.ep_no }}" class="ep-row {{ 'flag-must' if has_must else ('flag-minor' if probs) }}">
+        <span class="num">{{ b.ep_no }}</span>
+        <div class="body">
+          <p>{{ vb.beat }}{{ edited(pb) }}</p>
+          <p class="hook small">→ {{ vb.hook }}</p>
+          <p class="small">{% for n in vb.characters %}<span class="tag">{{ n }}</span>{% endfor %}
+            {% if b.is_turning_point %}<span class="pill good">turning point</span>{% endif %}</p>
+          {% for p in probs %}<span class="note {{ p.severity }}">{{ p.message }}</span><br>{% endfor %}
+          {% if reviewing %}
+          <details class="edit quiet" style="margin-top: 2px"><summary>✎ Edit episode {{ b.ep_no }}</summary>
+            <form method="post" action="{{ here }}/edit/beat/{{ b.ep_no }}" class="stack">
+              <label>What happens <textarea name="beat" rows="3">{{ vb.beat }}</textarea></label>
+              <label>How it ends (the hook) <textarea name="hook" rows="2">{{ vb.hook }}</textarea></label>
+              <details class="more"><summary>Characters and story threads</summary>
+                <div class="stack" style="margin-top: 8px">
+                  <label>Characters (comma separated) <input name="characters" value="{{ vb.characters | join(', ') }}"></label>
+                  <label>Story threads (one per line: open / advance / resolve, then the thread)
+                    <textarea name="threads" rows="3">{% for m in vb.threads %}{{ m.event }} {{ m.key }}
+{% endfor %}</textarea></label>
+                </div>
+              </details>
+              <div><button>Keep change</button></div>
+            </form>
+          </details>
+          {% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+
+{# ------------------------------------------------------------------ story & characters #}
+{% elif tab == 'story' %}
+{% set pbib = pending.bible %}
+<section class="card" id="rules">
+  <div class="act-head">
+    <div><h2>The story's rules{{ edited(pbib | reject('equalto', 'cast') | list) }}</h2>
+      <p class="muted small">{{ bible.genre }} · {{ pbib.tone or bible.tone }}</p></div>
+    {% if reviewing %}
+    <div class="tools">
+      <details class="edit"><summary>✎ Edit</summary>
+        <form method="post" action="{{ here }}/edit/bible" class="stack">
+          <label>Title <input name="title" value="{{ pbib.title or bible.title }}"></label>
+          <label>The story in a sentence <textarea name="logline" rows="2">{{ pbib.logline or bible.logline }}</textarea></label>
+          <label>Tone <input name="tone" value="{{ pbib.tone or bible.tone }}"></label>
+          <label>The hidden truth <textarea name="hidden_truth" rows="4">{{ pbib.hidden_truth or bible.hidden_truth }}</textarea></label>
+          <label>How it's written (one per line) <textarea name="style_guide" rows="6">{{ (pbib.style_guide or bible.style_guide) | join('\n') }}</textarea></label>
+          <label>Rules of the world (one per line) <textarea name="world_rules" rows="6">{{ (pbib.world_rules or bible.world_rules) | join('\n') }}</textarea></label>
+          <div><button>Keep change</button></div>
+        </form>
+      </details>
+    </div>
+    {% endif %}
+  </div>
+  <h3 style="margin-top: 12px">The hidden truth <span class="muted small">(only the writers know)</span></h3>
+  <p>{{ pbib.hidden_truth or bible.hidden_truth }}</p>
+  <h3 style="margin-top: 12px">How it's written</h3>
+  <ul>{% for r in pbib.style_guide or bible.style_guide %}<li>{{ r }}</li>{% endfor %}</ul>
+  <h3>Rules of the world</h3>
+  <ul>{% for r in pbib.world_rules or bible.world_rules %}<li>{{ r }}</li>{% endfor %}</ul>
+</section>
+
+<section class="card" id="cast">
+  <h2>Characters</h2>
+  {% set bcast = {} %}{% for c in bible.cast %}{% set _ = bcast.update({c.name: c}) %}{% endfor %}
+  <ul class="list">
+    {% for c in cast %}
+    {% set b = bcast.get(c.name, {}) %}
+    {% set pc = (pending.bible.cast or {}).get(c.name) %}
+    {% set v = pc or {'role': c.role, 'description': c.description, 'wants': b.wants or '', 'secret': b.secret or '', 'arc': c.arc} %}
+    <li>
+      <div class="act-head">
+        <div>
+          <strong>{{ c.name }}</strong> <span class="muted small">· {{ v.role }} · {{ c.importance }}{% if c.source != 'bible' %} · joins in {{ c.source | replace('arc:', 'arc ') }}{% elif b.enters_around_ep %} · from episode {{ b.enters_around_ep }}{% endif %}</span>{{ edited(pc) }}
+          <p class="small">{{ v.description }}</p>
+          {% if v.wants %}<p class="small"><span class="muted">Wants:</span> {{ v.wants }} {% if v.secret and v.secret != 'none' %}<span class="muted">· Hides:</span> {{ v.secret }}{% endif %}</p>{% endif %}
+          <p class="small"><span class="muted">Over the story:</span> {{ v.arc }}</p>
+        </div>
+        {% if reviewing and c.source == 'bible' %}
+        <div class="tools">
+          <details class="edit"><summary>✎ Edit</summary>
+            <form method="post" action="{{ here }}/edit/cast" class="stack">
+              <input type="hidden" name="name" value="{{ c.name }}">
+              <label>Role <input name="role" value="{{ v.role }}"></label>
+              <label>Who they are <textarea name="description" rows="2">{{ v.description }}</textarea></label>
+              <label>What they want <input name="wants" value="{{ v.wants }}"></label>
+              <label>What they hide <input name="secret" value="{{ v.secret }}"></label>
+              <label>How they change over the story <textarea name="arc" rows="2">{{ v.arc }}</textarea></label>
+              <div><button>Keep change</button></div>
+            </form>
+          </details>
+        </div>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Story threads</h2>
+  <p class="muted small">The questions that keep listeners coming back. Each one is opened, moved forward and answered over the episodes.</p>
+  <ul class="list">
+    {% for t in threads %}
+    <li><strong>{{ t.title }}</strong> <span class="muted small">· {{ t.key }}{% if t.source != 'bible' %} · added in {{ t.source | replace('arc:', 'arc ') }}{% endif %}</span>
+      <p class="small">{{ t.question }}</p></li>
+    {% endfor %}
+  </ul>
+</section>
+
+{% if reviewing %}
+<section class="card">
+  <h2>Start over</h2>
+  <p class="muted small">Have the model rebuild a large part of the plan from a note. Your old plan is kept in History.</p>
+  <div class="tools" style="margin-top: 8px">
+    {{ redo('all', None, 'all acts, arcs and episodes') }}
+    {{ redo('bible', None, 'everything, from new story rules') }}
+  </div>
+</section>
+{% endif %}
+
+{# ------------------------------------------------------------------ problems #}
+{% elif tab == 'problems' %}
+<section class="card">
+  <h2>What the checks found</h2>
+  <p class="muted small">Code checks coverage, story threads and characters; the model reviews each act for logic and pacing.
+    Nothing is fixed without you: edit the episode, redo its arc, or approve anyway.
+    {% if dropped %}{{ dropped }} model complaints were dropped because their quotes weren't really in the plan.{% endif %}</p>
+  <ul class="list">
+    {% for p in problems %}
+    <li>
+      <span class="pill {{ p.severity }}">{{ 'must fix' if p.severity == 'must_fix' else 'worth a look' }}</span>
+      {% for ep in p.eps %}<a href="?tab=episodes#ep-{{ ep }}">episode {{ ep }}</a>{{ ', ' if not loop.last }}{% endfor %}
+      <p>{{ p.message }}</p>
+    </li>
+    {% else %}
+    <li>No problems found.</li>
+    {% endfor %}
+  </ul>
+</section>
+
+{# ------------------------------------------------------------------ history #}
+{% else %}
+<section class="card">
+  <h2>Plan versions</h2>
+  <p class="muted small">Every change makes a new version. Nothing is overwritten.</p>
+  <table class="simple">
+    <tr><th>Version</th><th>By</th><th>Why</th><th>Status</th><th>When</th></tr>
+    {% for v in versions %}
+    <tr {% if v.id == plan.id %}class="current"{% endif %}><td>v{{ v.version }}</td><td>{{ 'you' if v.created_by == 'human' else 'model' }}</td>
+      <td>{{ v.reason or '' }}</td><td>{{ v.status }}</td><td class="muted small">{{ v.created_at[:16] | replace('T', ' ') }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block actionbar %}
+{% if reviewing %}
+<div class="actionbar"><div class="inner">
+  {% if pending_count %}
+    <strong>{{ pending_count }} change{{ 's' if pending_count > 1 }} not saved yet</strong>
+    <form method="post" action="{{ here }}/edits/discard"><button class="link">Discard</button></form>
+    <form method="post" action="{{ here }}/edits/send" class="grow">
+      <input name="note" placeholder="Why? (optional, kept in History)">
+      <button>Save changes and re-check</button>
+    </form>
+  {% else %}
+    {% if must %}<a href="?tab=problems">{{ must | length }} problem{{ 's' if must | length > 1 }} worth fixing first</a>{% else %}<span class="muted">Happy with it?</span>{% endif %}
+    <form method="post" action="{{ here }}/approve" class="grow" style="justify-content: flex-end">
+      <label class="inline">Then write episodes 1 to
+        <input type="number" name="write_until" value="{{ [5, story.total_episodes] | min }}" min="1" max="{{ story.total_episodes }}"></label>
+      <button class="big">Approve the plan</button>
+    </form>
+  {% endif %}
+</div></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,90 @@
+{% set state = status.state %}
+{% set w = status.waiting_for or {} %}
+{% set doing = {'bible': 'writing the story rules', 'plan_acts': 'planning the acts', 'plan_arcs': 'planning the arcs',
+  'plan_beats': 'planning episodes', 'plan_check': 'checking the plan', 'apply_plan': 'applying your changes',
+  'draft': 'drafting', 'check': 'checking', 'revise': 'revising', 'extract_memory': 'saving what happened',
+  'route_review': 'finishing', 'approve': 'moving on', 'summarize_arc': 'summarising the arc', 'feedback': 'applying your feedback'} %}
+<div id="status"
+  {% if state == 'running' %}hx-get="/stories/{{ story.id }}/status?was=running" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+
+<section class="card next">
+  {% if state == 'running' %}
+    <div class="msg">
+      <strong><span class="spinner"></span>Working…</strong>
+      {% if steps %}<span class="muted">{{ doing.get(steps[0].node, steps[0].node | replace('_', ' ')) }}{% if steps[0].ep_no %} · episode {{ steps[0].ep_no }}{% endif %}.
+        This page moves on by itself.</span>{% endif %}
+    </div>
+    {% if story.status == 'writing' %}
+    <form method="post" action="/stories/{{ story.id }}/pause"><button class="ghost">Pause after this episode</button></form>
+    {% endif %}
+  {% elif state == 'waiting' and w.kind == 'plan_review' %}
+    <div class="msg"><strong>Your plan is ready</strong><span class="muted">Read it, change anything you like, then approve it to start writing.</span></div>
+    <a class="btn big" href="/stories/{{ story.id }}/plan">Review the plan</a>
+  {% elif state == 'waiting' and w.kind == 'episode_review' %}
+    <div class="msg"><strong>Episode {{ w.ep_no }} is ready</strong><span class="muted">Approve it, ask for changes, or edit it yourself.</span></div>
+    <a class="btn big" href="/stories/{{ story.id }}/episodes/{{ w.ep_no }}">Read episode {{ w.ep_no }}</a>
+  {% elif state == 'waiting' and w.kind == 'feedback_confirm' %}
+    <div class="msg"><strong>Check how your note on episode {{ w.ep_no }} will be used</strong></div>
+    <a class="btn big" href="/stories/{{ story.id }}/episodes/{{ w.ep_no }}">Check it</a>
+  {% elif state == 'waiting' and w.kind == 'write_more' %}
+    <div class="msg"><strong>{% if w.next_ep > 1 %}Paused after episode {{ w.next_ep - 1 }}{% else %}Ready to write{% endif %}</strong>
+      <span class="muted">Pick up where you left off whenever you like.</span></div>
+    <form method="post" action="/stories/{{ story.id }}/write" class="row">
+      <label class="inline">Write up to episode
+        <input type="number" name="until" min="{{ w.next_ep }}" max="{{ story.total_episodes }}" value="{{ [w.next_ep + 4, story.total_episodes] | min }}"></label>
+      <button class="big">Continue writing</button>
+    </form>
+  {% elif state == 'paused' %}
+    <div class="msg"><strong>Stopped part-way</strong><span class="muted">A restart or an error. Nothing finished is lost.</span></div>
+    <form method="post" action="/stories/{{ story.id }}/continue"><button class="big">Continue</button></form>
+  {% else %}
+    <div class="msg"><strong>{% if story.status == 'done' %}All {{ story.total_episodes }} episodes are written{% else %}Nothing to do right now{% endif %}</strong></div>
+  {% endif %}
+</section>
+
+{% if status.error %}<div class="flash error">Last run stopped: {{ status.error }}</div>{% endif %}
+{% if state == 'waiting' and w.error %}<div class="flash error">That couldn't be applied: {{ w.error }}</div>{% endif %}
+
+{% if active %}
+<section class="card">
+  <h2>Standing instructions</h2>
+  <p class="muted small">From your notes. Every new episode is written with these and checked against them.</p>
+  <ul>{% for d in active %}<li>{{ d.text }} <span class="muted small">· from episode {{ d.from_ep }}</span></li>{% endfor %}</ul>
+  <a class="small" href="/stories/{{ story.id }}/memory#instructions">Pause or finish one</a>
+</section>
+{% endif %}
+
+{% if episodes %}
+<section class="card">
+  <h2>Episodes</h2>
+  <ul class="list">
+    {% for e in episodes %}
+    <li class="ep-row">
+      <span class="num">{{ e.ep_no }}</span>
+      <div class="body">
+        <a href="/stories/{{ story.id }}/episodes/{{ e.ep_no }}"><strong>{{ (e.text.split('\n')[0] | plain_title) or 'Episode ' ~ e.ep_no }}</strong></a>
+        {% if e.one_line %}<p class="muted small">{{ e.one_line }}</p>{% endif %}
+      </div>
+      <span class="side">
+        {% if e.created_by == 'human' %}<span class="pill edited">edited by you</span>{% endif %}
+        <span class="pill {{ e.status }}">{{ {'approved': 'approved', 'in_review': 'needs review', 'draft': 'writing', 'rejected': 'rewriting', 'superseded': 'replaced'}[e.status] }}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<details class="card">
+  <summary><strong>Activity</strong> <span class="muted small">· {{ usage.calls }} model calls · {{ "{:,}".format(usage.tokens_in + usage.tokens_out) }} tokens · {{ usage.seconds }} s</span></summary>
+  <p class="muted small" style="margin-top: 10px">{{ "{:,}".format(usage.tokens_in) }} tokens in, {{ "{:,}".format(usage.tokens_out) }} out, {{ usage.failed }} failed calls (retried).</p>
+  {% if steps %}
+  <table class="simple small">
+    {% for s in steps %}
+    <tr><td class="muted">{{ s.created_at[11:19] }}</td><td>{{ s.node | replace('_', ' ') }}</td>
+        <td>{{ s.decision | replace('_', ' ') }}</td><td class="muted">{% if s.ep_no %}ep {{ s.ep_no }}{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</details>
+</div>

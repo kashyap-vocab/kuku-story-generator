@@ -42,11 +42,15 @@ def instance(schema: dict[str, Any], defs: dict[str, Any] | None = None, counter
     if kind == "boolean":
         return False
     n = next(counter)
-    return f"text{n} note{n} line{n}"  # unique words, so fake lines never look like copies
+    text = f"text{n} note{n} line{n}"  # unique words, so fake lines never look like copies
+    while len(text) < schema.get("minLength", 0):
+        text += f" more{n}"
+    return text
 
 
 class SchemaFake:
-    """Fake OpenAI client. `hooks[name]` can override the answer (or raise) for a schema name."""
+    """Fake OpenAI client. `hooks[name]` can override the answer (or raise) for a schema name;
+    `hooks["text"]` answers free-text calls."""
 
     def __init__(self, hooks: dict[str, Callable[[dict[str, Any], dict[str, Any]], Any]] | None = None):
         self.hooks = hooks or {}
@@ -60,9 +64,19 @@ class SchemaFake:
         self.calls.append(name)
         self.requests.append(kwargs)
         if rf is None:
-            return make_response("Some prose.")
+            return make_response(self.hooks["text"](kwargs) if "text" in self.hooks else "Some prose.")
         schema = rf["json_schema"]["schema"]
         value = instance(schema)
         if name in self.hooks:
             value = self.hooks[name](value, kwargs)
         return make_response(json.dumps(value))
+
+
+def episode_text(kwargs) -> str:
+    """A clean ~500-word episode for whichever episode the prompt asks for."""
+    import re
+
+    prompt = kwargs["messages"][-1]["content"]
+    ep = re.findall(r"episode (\d+)", prompt.split("=== YOUR TASK ===")[-1], flags=re.I)[0]
+    body = " ".join(f"Leo walks to door {i} and knocks twice." for i in range(70))
+    return f"Episode {ep}: The Door\n\n{body}\n\nThe door opens by itself."

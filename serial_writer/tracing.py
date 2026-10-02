@@ -73,12 +73,12 @@ def log_call(conn: sqlite3.Connection, rec: CallRecord) -> None:
     )
 
 
-def episode_tokens_used(conn: sqlite3.Connection, story_id: int, ep_no: int) -> int:
-    """Tokens spent on one episode so far, failed attempts included."""
+def episode_tokens_used(conn: sqlite3.Connection, story_id: int, ep_no: int, since: str | None = None) -> int:
+    """Tokens spent on one episode (since `since`, if given), failed attempts included."""
     row = conn.execute(
         "SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM llm_calls "
-        "WHERE story_id = ? AND ep_no = ?",
-        (story_id, ep_no),
+        "WHERE story_id = ? AND ep_no = ? AND created_at >= ?",
+        (story_id, ep_no, since or ""),
     ).fetchone()
     return row[0]
 

@@ -75,7 +75,9 @@ def test_approve_locks_plan_and_records_feedback(make_engine):
     sid, status = _start(engine)
     pv = status["waiting_for"]["plan_version_id"]
 
-    assert engine.advance(sid, {"action": "approve", "note": "looks good"})["state"] == "done"
+    status = engine.advance(sid, {"action": "approve", "note": "looks good"})
+    # With no "write up to" given, writing waits to be told how far to go.
+    assert status["state"] == "waiting" and status["waiting_for"]["kind"] == "write_more"
     assert engine.conn.execute("SELECT status FROM plan_versions WHERE id = ?", (pv,)).fetchone()[0] == "approved"
     assert engine.conn.execute("SELECT status FROM bible_versions WHERE story_id = ?", (sid,)).fetchone()[0] == "approved"
     assert engine.conn.execute("SELECT status FROM stories WHERE id = ?", (sid,)).fetchone()[0] == "writing"
@@ -212,8 +214,9 @@ def test_arcs_cannot_duplicate_threads_or_people(make_engine):
         return value
 
     engine = make_engine(SchemaFake(hooks={"Bible": bible, "ArcsOut": arcs}))
-    _, status = _start(engine)
-    pv = status["waiting_for"]["plan_version_id"]
+    # Long enough that acts split into several arcs (shorter acts are one arc, copied from the act).
+    sid = engine.create_story("A rider delivers to the dead.", total_episodes=100)
+    pv = engine.advance(sid)["waiting_for"]["plan_version_id"]
 
     keys = [r[0] for r in engine.conn.execute("SELECT key FROM plan_threads WHERE plan_version_id = ?", (pv,))]
     assert keys.count("missing_ledger") == 1 and "missing_ledger_2" not in keys
@@ -295,8 +298,98 @@ def test_copied_arc_is_caught_even_when_the_model_says_its_fine(make_engine):
                and len(r["messages"]) == 4]
     # Arc 2 (eps 5-8) copies arc 1 (eps 1-4).
     assert any("Ep 5 is nearly a copy of ep 1" in r["messages"][-1]["content"] for r in repairs)
-    # The fake keeps copying even after repair, so the plan check must still flag it for the human.
+    # Copies left after the repair get one fresh attempt (the fake copies again).
+    fresh = [r for r in fake.requests if r["response_format"]["json_schema"]["name"] == "BeatsOut"
+             and len(r["messages"]) == 2 and r["temperature"] == 0.9]
+    assert len(fresh) == 4  # arcs 2-5
+    # The fake keeps copying even then, so the plan check must still flag it for the human.
     report = engine.conn.execute(
         "SELECT check_report FROM plan_versions WHERE id = ?", (status["waiting_for"]["plan_version_id"],)
     ).fetchone()[0]
     assert "nearly a copy" in report
+
+
+def test_quotes_must_really_be_in_the_text():
+    from serial_writer.similarity import contains_quote
+
+    text = "Ping.\n\nA notification pops up. Priority Delivery.\n\nI squint. Triple the usual rate. \"Oaksview?\" I say. \"That place is a graveyard.\""
+    assert contains_quote(text, "Priority Delivery. Triple the usual rate.")  # two nearby sentences joined
+    assert contains_quote(text, "'Oaksview?' I say. 'That place is a graveyard.'")  # quote marks swapped
+    assert contains_quote(text, "that place is a graveyard")
+    assert not contains_quote(text, "Priority Delivery. Quadruple the usual rate.")  # one part made up
+    assert not contains_quote(text, "The building burned in 1994.")
+    assert not contains_quote(text, "  ")
+
+
+def test_fresh_attempt_replaces_a_copy_the_repair_could_not_fix(make_engine):
+    first_arc: list[dict] = []
+
+    def copy_unless_fresh(value, kwargs):
+        if not first_arc:
+            first_arc.extend(value["beats"])
+        elif kwargs["temperature"] != 0.9:
+            value["beats"] = [dict(b) for b in first_arc]
+        return value
+
+    fake = SchemaFake(hooks={"BeatsOut": copy_unless_fresh})
+    engine = make_engine(fake)
+    _, status = _start(engine)
+
+    report = engine.conn.execute(
+        "SELECT check_report FROM plan_versions WHERE id = ?", (status["waiting_for"]["plan_version_id"],)
+    ).fetchone()[0]
+    assert "nearly a copy" not in report
+    kept = engine.conn.execute("SELECT detail FROM steps WHERE decision = 'fresh_attempt'").fetchall()
+    assert kept and all('"kept": "fresh"' in k[0] for k in kept)
+
+
+def test_thread_labels_the_model_gets_wrong_are_tidied_by_code(make_engine):
+    def resolve_then_advance(value, kwargs):
+        beats = value["beats"]
+        key = beats[0]["threads"][0]["key"] if beats[0]["threads"] else None
+        if key:
+            events = ["advance", "resolve", "advance", "advance"]  # touched before opening, resolved too early
+            for b, ev in zip(beats, events):
+                b["threads"] = [{"key": key, "event": ev}]
+        return value
+
+    engine = make_engine(SchemaFake(hooks={"BeatsOut": resolve_then_advance}))
+    _, status = _start(engine)
+    beats = load_beats(engine.conn, status["waiting_for"]["plan_version_id"], 1, 4)
+    assert [b["threads"][0]["event"] for b in beats] == ["open", "advance", "advance", "resolve"]
+    assert engine.conn.execute("SELECT COUNT(*) FROM steps WHERE decision = 'tidied_thread_labels'").fetchone()[0] >= 1
+
+
+def test_story_size_follows_the_number_of_episodes():
+    from serial_writer.plan_shape import story_size
+
+    short, mid, long = story_size(15), story_size(50), story_size(200)
+    assert (short.acts, short.cast, short.threads, short.arc_extras) == (3, (3, 5), (2, 3), 0)
+    assert (mid.acts, mid.arc_extras) == (5, 1) and mid.cast[0] < long.cast[0]
+    assert (long.acts, long.cast, long.threads, long.arc_extras) == (5, (10, 12), (7, 9), 2)
+    acts = act_spans(15)
+    assert [(a.start, a.end) for a in acts] == [(1, 5), (6, 10), (11, 15)]
+
+
+def test_short_story_gets_a_small_cast_and_one_arc_per_act(make_engine):
+    fake = SchemaFake()
+    engine = make_engine(fake)
+    sid = engine.create_story("A rider delivers to the dead.", total_episodes=15)
+    status = engine.advance(sid)
+    pv = status["waiting_for"]["plan_version_id"]
+
+    bible_req = next(r for r in fake.requests if r["response_format"]["json_schema"]["name"] == "Bible")
+    schema = bible_req["response_format"]["json_schema"]["schema"]["properties"]
+    assert (schema["cast"]["minItems"], schema["cast"]["maxItems"]) == (3, 5)
+    assert (schema["threads"]["minItems"], schema["threads"]["maxItems"]) == (2, 3)
+    assert "3-5 people" in bible_req["messages"][-1]["content"]
+    # Three acts, each its own single arc: copied, so no arc-planning calls at all.
+    assert len(load_acts(engine.conn, pv)) == 3
+    assert [(a["start_ep"], a["end_ep"]) for a in load_arcs(engine.conn, pv)] == [(1, 5), (6, 10), (11, 15)]
+    assert "ArcsOut" not in fake.calls
+    assert [b["ep_no"] for b in load_beats(engine.conn, pv)] == list(range(1, 16))
+
+    # Editing an act edits its copied arc too.
+    status = engine.advance(sid, {"action": "edit", "changes": {"acts": {"2": {"goal": "Everything goes wrong."}}}})
+    arc2 = load_arcs(engine.conn, status["waiting_for"]["plan_version_id"])[1]
+    assert arc2["goal"] == "Everything goes wrong."

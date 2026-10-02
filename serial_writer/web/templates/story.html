@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ story.title or 'Story' }}{% endblock %}
+{% block crumbs %}<span class="crumb">{{ story.title or 'Story ' ~ story.id }}</span>{% endblock %}
+{% block content %}
+<section style="margin-bottom: 16px">
+  <h1>{{ story.title or "Planning your story…" }}</h1>
+  <p class="muted">{{ story.premise }}</p>
+  <p class="row small" style="margin-top: 8px">
+    <a href="/stories/{{ story.id }}/plan">The plan</a> ·
+    <a href="/stories/{{ story.id }}/memory">What the story remembers</a>
+  </p>
+</section>
+
+{% include "_status.html" %}
+
+<details class="card">
+  <summary><strong>Settings</strong> <span class="muted small">· stop for my review: {{ {'every_episode': 'after every episode', 'every_n': 'every ' ~ review.every_n ~ ' episodes', 'on_issues': 'only when checks find problems', 'arc_end': 'at the end of each arc'}[review.mode] }}</span></summary>
+  <form method="post" action="/stories/{{ story.id }}/review" class="row" style="margin-top: 12px">
+    <label class="inline">Stop for my review
+      <select name="review_mode">
+        {% for value, label in [('every_episode', 'after every episode'), ('every_n', 'every N episodes'),
+                                ('on_issues', 'only when checks find problems'), ('arc_end', 'at the end of each arc')] %}
+        <option value="{{ value }}" {% if review.mode == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="inline">N <input type="number" name="every_n" min="1" value="{{ review.every_n or 5 }}"></label>
+    <button class="ghost">Save</button>
+  </form>
+  <p class="muted small">Applies from the next episode. Episodes with problems the checks couldn't fix always stop for review.</p>
+</details>
+{% endblock %}

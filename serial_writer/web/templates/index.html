@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Start a new story</h1>
+  <p class="muted">Give it one sentence. It plans every episode first; you approve the plan, then review episodes as they're written.</p>
+  <form method="post" action="/stories" class="stack" style="margin-top: 12px">
+    <textarea name="premise" rows="3" required placeholder="A delivery rider realizes every address on today's route belongs to someone who died in the same building."></textarea>
+    <div class="row">
+      <label class="inline">Episodes <input type="number" name="episodes" value="200" min="5" max="500"></label>
+      <label class="inline">Stop for my review
+        <select name="review_mode">
+          <option value="every_episode">after every episode</option>
+          <option value="every_n">every N episodes</option>
+          <option value="on_issues">only when checks find problems</option>
+          <option value="arc_end">at the end of each arc</option>
+        </select>
+      </label>
+      <label class="inline">N <input type="number" name="every_n" min="1" value="5"></label>
+      <span class="spacer"></span>
+      <button class="big">Plan the story</button>
+    </div>
+    <p class="muted small">Planning takes about 15 minutes for 200 episodes. You can change the review setting any time.</p>
+  </form>
+</section>
+
+{% if stories %}
+<section class="card">
+  <h2>Your stories</h2>
+  <ul class="list">
+    {% for s in stories %}
+    <li class="row">
+      <div style="flex: 1; min-width: 0">
+        <a href="/stories/{{ s.id }}"><strong>{{ s.title or 'Planning…' }}</strong></a>
+        <p class="muted small">{{ s.premise }}</p>
+      </div>
+      <span class="pill {{ states[s.id] }}">{{ {'waiting': 'needs you', 'running': 'working', 'paused': 'stopped', 'done': 'done', 'not_started': 'new'}[states[s.id]] }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}
